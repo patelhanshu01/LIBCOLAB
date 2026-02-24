@@ -514,7 +514,8 @@ async def create_borrow(borrow: BorrowCreate, user: dict = Depends(get_current_u
     }
     
     await db.borrows.insert_one(borrow_doc)
-    return BorrowResponse(**borrow_doc, status=BorrowStatus.PENDING)
+    borrow_doc["status"] = BorrowStatus.PENDING
+    return BorrowResponse(**borrow_doc)
 
 @api_router.get("/borrows", response_model=List[BorrowResponse])
 async def get_borrows(user: dict = Depends(get_current_user)):
@@ -522,7 +523,11 @@ async def get_borrows(user: dict = Depends(get_current_user)):
         borrows = await db.borrows.find({}, {"_id": 0}).to_list(1000)
     else:
         borrows = await db.borrows.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
-    return [BorrowResponse(**b, status=BorrowStatus(b["status"])) for b in borrows]
+    result = []
+    for b in borrows:
+        b["status"] = BorrowStatus(b["status"])
+        result.append(BorrowResponse(**b))
+    return result
 
 @api_router.put("/borrows/{borrow_id}/approve")
 async def approve_borrow(borrow_id: str, user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.LIBRARIAN]))):
