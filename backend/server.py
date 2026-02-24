@@ -668,7 +668,8 @@ async def enroll(enrollment: EnrollmentCreate, user: dict = Depends(get_current_
     }
     
     await db.enrollments.insert_one(enrollment_doc)
-    return EnrollmentResponse(**enrollment_doc, status=EnrollmentStatus.ENROLLED)
+    enrollment_doc["status"] = EnrollmentStatus.ENROLLED
+    return EnrollmentResponse(**enrollment_doc)
 
 @api_router.get("/enrollments", response_model=List[EnrollmentResponse])
 async def get_enrollments(user: dict = Depends(get_current_user)):
@@ -676,7 +677,11 @@ async def get_enrollments(user: dict = Depends(get_current_user)):
         enrollments = await db.enrollments.find({}, {"_id": 0}).to_list(1000)
     else:
         enrollments = await db.enrollments.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
-    return [EnrollmentResponse(**e, status=EnrollmentStatus(e["status"])) for e in enrollments]
+    result = []
+    for e in enrollments:
+        e["status"] = EnrollmentStatus(e["status"])
+        result.append(EnrollmentResponse(**e))
+    return result
 
 @api_router.put("/enrollments/{enrollment_id}/progress")
 async def update_progress(enrollment_id: str, module_id: str, user: dict = Depends(get_current_user)):
