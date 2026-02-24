@@ -757,7 +757,7 @@ async def generate_certificate(enrollment_id: str, user: dict = Depends(get_curr
         raise HTTPException(status_code=400, detail="Course not completed")
     
     # Check if certificate already exists
-    existing = await db.certificates.find_one({"enrollment_id": enrollment_id})
+    existing = await db.certificates.find_one({"enrollment_id": enrollment_id}, {"_id": 0})
     if existing:
         return CertificateResponse(**existing)
     
