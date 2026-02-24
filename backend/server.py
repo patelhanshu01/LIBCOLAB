@@ -430,7 +430,11 @@ async def create_book(book: BookCreate, user: dict = Depends(require_roles([User
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.books.insert_one(book_doc)
-    return BookResponse(**book_doc, category=book.category, pricing_type=book.pricing_type, format=book.format)
+    # Return response with proper enum values
+    book_doc["category"] = book.category
+    book_doc["pricing_type"] = book.pricing_type
+    book_doc["format"] = book.format
+    return BookResponse(**book_doc)
 
 @api_router.get("/books", response_model=List[BookResponse])
 async def get_books(
