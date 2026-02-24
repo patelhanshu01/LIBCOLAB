@@ -453,14 +453,23 @@ async def get_books(
         ]
     
     books = await db.books.find(query, {"_id": 0}).to_list(1000)
-    return [BookResponse(**b, category=BookCategory(b["category"]), pricing_type=PricingType(b["pricing_type"]), format=BookFormat(b["format"])) for b in books]
+    result = []
+    for b in books:
+        b["category"] = BookCategory(b["category"])
+        b["pricing_type"] = PricingType(b["pricing_type"])
+        b["format"] = BookFormat(b["format"])
+        result.append(BookResponse(**b))
+    return result
 
 @api_router.get("/books/{book_id}", response_model=BookResponse)
 async def get_book(book_id: str):
     book = await db.books.find_one({"id": book_id}, {"_id": 0})
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
-    return BookResponse(**book, category=BookCategory(book["category"]), pricing_type=PricingType(book["pricing_type"]), format=BookFormat(book["format"]))
+    book["category"] = BookCategory(book["category"])
+    book["pricing_type"] = PricingType(book["pricing_type"])
+    book["format"] = BookFormat(book["format"])
+    return BookResponse(**book)
 
 @api_router.put("/books/{book_id}")
 async def update_book(book_id: str, updates: dict, user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.LIBRARIAN]))):
