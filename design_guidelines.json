@@ -1,0 +1,162 @@
+{
+  "identity": {
+    "name": "E1",
+    "persona": "The Anti-AI Designer",
+    "mission": "Create a Library LMS that feels like a lifestyle app, not a filing cabinet.",
+    "core_principles": [
+      "Fusion: Mix Spotify discovery with Notion utility.",
+      "Emotion: Academic = Clarity/Focus; Leisure = Warmth/Excitement.",
+      "Content First: Book covers and course art are the heroes.",
+      "Negative Space: generous padding (p-8+) to reduce cognitive load.",
+      "Contrast: High definition borders and shadows."
+    ]
+  },
+  "theme_strategy": {
+    "mode": "light_default_with_dark_toggle",
+    "emotional_archetype": "The Intellectual Playground",
+    "description": "A split-personality interface. The 'Academic' side is structured, cool, and precise (Swiss Style). The 'Leisure' side is organic, warm, and playful (Neo-Brutalist Pop).",
+    "border_radius": "rounded-xl",
+    "font_strategy": "The Soft Utility"
+  },
+  "typography": {
+    "headings": {
+      "family": "Outfit, sans-serif",
+      "usage": "All Section Headers, Hero Titles, Modal Titles",
+      "weights": ["500", "700"],
+      "tracking": "tracking-tight"
+    },
+    "body": {
+      "family": "Inter, sans-serif",
+      "usage": "Paragraphs, UI Labels, Inputs, Data Tables",
+      "weights": ["400", "500"],
+      "tracking": "tracking-normal"
+    },
+    "mono": {
+      "family": "JetBrains Mono, monospace",
+      "usage": "ISBNs, Course Codes, Grades",
+      "weights": ["400"]
+    }
+  },
+  "colors": {
+    "palette": {
+      "primary": {
+        "name": "Electric Indigo",
+        "hex": "#4F46E5",
+        "usage": "Brand core, Primary Buttons, Active States"
+      },
+      "academic": {
+        "name": "Slate Teal",
+        "hex": "#0F766E",
+        "usage": "Academic Section Headers, Progress Bars, Study Badges"
+      },
+      "leisure": {
+        "name": "Sunset Orange",
+        "hex": "#F97316",
+        "usage": "Leisure Section Headers, 'Rent' Buttons, Fun Tags"
+      },
+      "neutral_bg": {
+        "light": "#F8FAFC",
+        "dark": "#0F172A",
+        "usage": "Page Backgrounds"
+      },
+      "surface": {
+        "light": "#FFFFFF",
+        "dark": "#1E293B",
+        "usage": "Cards, Sidebars, Modals"
+      }
+    },
+    "gradients": {
+      "academic_glow": "bg-gradient-to-r from-teal-500/10 to-blue-500/10",
+      "leisure_glow": "bg-gradient-to-r from-orange-500/10 to-yellow-500/10"
+    }
+  },
+  "layout_strategies": {
+    "global": {
+      "spacing": "Relaxed. Use p-6 or p-8 for containers. gap-6 for grids.",
+      "container_width": "max-w-7xl mx-auto",
+      "responsive": "Mobile-first. Stacked columns on < md. Sidebar becomes bottom nav on mobile."
+    },
+    "dashboards": {
+      "student": "Bento Grid Mode A. Hero section showing 'Current Read' or 'Next Class'.",
+      "admin": "High Density Grid Mode B. Data tables with sticky headers.",
+      "librarian": "Utility focus. Search bar prominent. Quick actions for Check-in/out."
+    },
+    "sections": {
+      "academic_browse": "Structured List or Dense Grid. Focus on metadata (Grade, Subject).",
+      "leisure_browse": "Masonry or Asymmetrical Grid. Focus on cover art and vibes."
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-primary text-white hover:bg-primary/90 rounded-full px-8 py-3 font-medium transition-transform active:scale-95",
+      "academic_action": "bg-white border border-teal-200 text-teal-700 hover:bg-teal-50 rounded-md shadow-sm",
+      "leisure_action": "bg-orange-500 text-white hover:bg-orange-600 rounded-xl shadow-lg hover:shadow-orange-500/25"
+    },
+    "cards": {
+      "book_card": "group relative overflow-hidden rounded-xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-all hover:-translate-y-1",
+      "course_card": "border-l-4 border-l-primary bg-white shadow-sm p-6 rounded-r-xl",
+      "stat_card": "bg-white p-6 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between"
+    },
+    "navigation": {
+      "sidebar": "Fixed left (desktop). w-64. Border-r. Glassmorphism optional. Links have rounded-md hover states.",
+      "mobile_nav": "Fixed bottom. High z-index. Solid background with top border. Icon-heavy."
+    },
+    "feedback": {
+      "toast": "Use Sonner. Position: bottom-right.",
+      "loading": "Skeleton loaders matching the layout (not spinners)."
+    }
+  },
+  "assets": {
+    "icons": {
+      "library": "lucide-react (default)",
+      "recommendation": "Use phosphor-icons/react (Duotone) for specific leisure section icons if available, otherwise Lucide."
+    },
+    "images": {
+      "landing_hero": {
+        "url": "https://images.pexels.com/photos/8500359/pexels-photo-8500359.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "alt": "Students collaborating in a modern library",
+        "usage": "Main landing page hero background or split visuals."
+      },
+      "leisure_vibes": {
+        "url": "https://images.unsplash.com/photo-1763890498949-efd5d4acb8ac?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "alt": "Relaxed reading in park",
+        "usage": "Leisure section banner or promo card."
+      },
+      "digital_learning": {
+        "url": "https://images.pexels.com/photos/33846282/pexels-photo-33846282.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "alt": "Students using tablets",
+        "usage": "Course dashboard or Academic section highlight."
+      },
+      "book_display": {
+        "url": "https://images.pexels.com/photos/3747460/pexels-photo-3747460.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "alt": "Neat book shelves",
+        "usage": "Library inventory or catalog header."
+      }
+    }
+  },
+  "motion": {
+    "page_transition": "opacity-0 to opacity-100 duration-300 ease-in-out",
+    "hover_effects": "Scale 1.02 on cards. Color shift on links.",
+    "list_entrance": "Staggered fade-in (Framer Motion recommended if available, otherwise CSS keyframes)."
+  },
+  "accessibility_rules": {
+    "contrast": "Ensure text over images has a bg-black/40 overlay or text-shadow.",
+    "focus": "Visible ring-2 ring-primary ring-offset-2 on all interactive elements.",
+    "labels": "All icon-only buttons must have aria-label."
+  },
+  "instructions_to_main_agent": [
+    "1. Setup: Install 'lucide-react' and 'recharts' immediately.",
+    "2. Auth: Create a 'RoleGuard' component early to handle the 6 user roles.",
+    "3. Dashboard: Do not build one generic dashboard. Build a 'DashboardShell' layout, then specific widgets for Student vs Admin.",
+    "4. Store: For the Leisure section, use a 'Shopping Cart' context even if payment is mock.",
+    "5. PDF: For certificates, use a simple HTML-to-PDF print style or a lightweight library.",
+    "6. Tables: Use Shadcn Table for inventory/users. Do not build custom divs for tables.",
+    "7. Mobile: Verify the Sidebar collapses correctly on mobile."
+  ],
+  "universal_guidelines": [
+    "Avoid generic 'AI slop' aesthetics. No gradients as primary backgrounds.",
+    "Use glass-morphism (backdrop-blur-md) for sticky headers.",
+    "Do not center-align main content text; keep it left-aligned for readability.",
+    "Add 'data-testid' to all interactive elements."
+  ]
+}
