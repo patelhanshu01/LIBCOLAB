@@ -90,10 +90,9 @@ const LoginPage = () => {
       });
 
       const { access_token, user } = response.data;
-      localStorage.setItem('token', access_token);
-      
-      // Manually trigger auth context update
-      window.location.href = getRedirectPath(user.role);
+      loginWithToken(access_token, user);
+      toast.success(`Welcome, ${user.name}!`);
+      redirectBasedOnRole(user.role);
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Invalid school credentials');
     } finally {
