@@ -336,16 +336,18 @@ const LoginPage = () => {
                   <div>Pass: admin123</div>
                   <div>Parent: parent@family.com</div>
                   <div>Pass: parent123</div>
+                  <div>Librarian: librarian@library.com</div>
+                  <div>Pass: librarian123</div>
                 </div>
               </div>
               <div>
                 <p className="font-medium text-muted-foreground mb-1">School Login (NTHS):</p>
                 <div className="grid grid-cols-2 gap-1 text-muted-foreground">
                   <div>Student ID: NTHS-2024-001</div>
-                  <div>Email: student@school.com</div>
+                  <div>Email: t.anderson@nths.edu</div>
                   <div>Teacher ID: T-NTHS-001</div>
                   <div>Email: m.johnson@nths.edu</div>
-                  <div colSpan={2}>Pass: student123 / teacher123</div>
+                  <div className="col-span-2">Pass: student123 / teacher123</div>
                 </div>
               </div>
             </div>
