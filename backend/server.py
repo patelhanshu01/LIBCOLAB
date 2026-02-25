@@ -490,7 +490,7 @@ async def verify_school_login(data: SchoolVerifyRequest):
         raise HTTPException(status_code=401, detail="Invalid password")
     
     # Log login activity
-    await log_activity(user["id"], "login", f"Logged in via school verification", {"school_id": data.school_id})
+    await log_activity(user["id"], "login", "Logged in via school verification", {"school_id": data.school_id})
     await check_and_award_badges(user["id"])
     
     token = create_token(user["id"], user["role"])
@@ -578,7 +578,7 @@ async def login(credentials: UserLogin):
     if not user or not verify_password(credentials.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    await log_activity(user["id"], "login", f"User logged in")
+    await log_activity(user["id"], "login", "User logged in")
     await check_and_award_badges(user["id"])
     
     token = create_token(user["id"], user["role"])
