@@ -2050,7 +2050,7 @@ async def seed_data():
     
     # ==================== BADGES ====================
     # Award some badges
-    await db.users.update_one({"email": "student@school.com"}, {"$set": {"badges": ["book_worm"]}})
+    await db.users.update_one({"email": "t.anderson@nths.edu"}, {"$set": {"badges": ["book_worm"]}})
     await db.users.update_one({"email": "e.wilson@nths.edu"}, {"$set": {"badges": ["quiz_master", "perfect_attendance"]}})
     
     # ==================== CERTIFICATES ====================
