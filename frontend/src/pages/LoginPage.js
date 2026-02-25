@@ -27,7 +27,7 @@ const LoginPage = () => {
   const [schoolEmail, setSchoolEmail] = useState('');
   const [schoolRole, setSchoolRole] = useState('student');
   
-  const { login } = useAuth();
+  const { login, loginWithToken } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
