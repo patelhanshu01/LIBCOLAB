@@ -1138,10 +1138,95 @@ async def add_quiz(course_id: str, quiz: QuizCreate, user: dict = Depends(requir
     await db.courses.update_one({"id": course_id}, {"$push": {"quizzes": quiz_doc}})
     return {"message": "Quiz added", "quiz_id": quiz_id}
 
+@api_router.put("/courses/{course_id}")
+async def update_course(course_id: str, updates: dict, user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.TEACHER]))):
+    allowed = {"title", "description", "grade_levels", "subjects", "is_free", "price", "cover_image"}
+    update_data = {k: v for k, v in updates.items() if k in allowed}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    result = await db.courses.update_one({"id": course_id}, {"$set": update_data})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return {"message": "Course updated"}
+
 @api_router.delete("/courses/{course_id}")
 async def delete_course(course_id: str, user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.TEACHER]))):
     await db.courses.delete_one({"id": course_id})
+    await db.enrollments.delete_many({"course_id": course_id})
     return {"message": "Course deleted"}
+
+@api_router.put("/courses/{course_id}/modules/{module_id}")
+async def update_module(course_id: str, module_id: str, updates: dict, user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.TEACHER]))):
+    course = await db.courses.find_one({"id": course_id})
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    modules = course.get("modules", [])
+    for i, m in enumerate(modules):
+        if m["id"] == module_id:
+            for k, v in updates.items():
+                if k in {"title", "description", "content", "video_url", "order"}:
+                    modules[i][k] = v
+            break
+    await db.courses.update_one({"id": course_id}, {"$set": {"modules": modules}})
+    return {"message": "Module updated"}
+
+@api_router.delete("/courses/{course_id}/modules/{module_id}")
+async def delete_module(course_id: str, module_id: str, user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.TEACHER]))):
+    await db.courses.update_one({"id": course_id}, {"$pull": {"modules": {"id": module_id}}})
+    return {"message": "Module deleted"}
+
+@api_router.delete("/courses/{course_id}/quizzes/{quiz_id}")
+async def delete_quiz(course_id: str, quiz_id: str, user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.TEACHER]))):
+    await db.courses.update_one({"id": course_id}, {"$pull": {"quizzes": {"id": quiz_id}}})
+    return {"message": "Quiz deleted"}
+
+# ===================== ADMIN USER MANAGEMENT =====================
+@api_router.post("/admin/users")
+async def admin_create_user(user_data: dict, admin: dict = Depends(require_roles([UserRole.ADMIN]))):
+    required = {"email", "password", "name", "role"}
+    if not required.issubset(user_data.keys()):
+        raise HTTPException(status_code=400, detail="Missing required fields: email, password, name, role")
+    existing = await db.users.find_one({"email": user_data["email"]})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user_id = str(uuid.uuid4())
+    hashed_pw = bcrypt.hashpw(user_data["password"].encode(), bcrypt.gensalt()).decode()
+    new_user = {
+        "id": user_id,
+        "email": user_data["email"],
+        "name": user_data["name"],
+        "role": user_data["role"],
+        "password": hashed_pw,
+        "phone": user_data.get("phone"),
+        "school_id": user_data.get("school_id"),
+        "student_id": user_data.get("student_id"),
+        "employee_id": user_data.get("employee_id"),
+        "grade_level": user_data.get("grade_level"),
+        "parent_id": user_data.get("parent_id"),
+        "badges": [],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.users.insert_one(new_user)
+    return {"message": "User created", "id": user_id}
+
+@api_router.put("/admin/users/{user_id}/role")
+async def admin_update_role(user_id: str, data: dict, admin: dict = Depends(require_roles([UserRole.ADMIN]))):
+    role = data.get("role")
+    if role not in [r.value for r in UserRole]:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    await db.users.update_one({"id": user_id}, {"$set": {"role": role}})
+    return {"message": "Role updated"}
+
+@api_router.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, admin: dict = Depends(require_roles([UserRole.ADMIN]))):
+    if admin["id"] == user_id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    result = await db.users.delete_one({"id": user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.enrollments.delete_many({"user_id": user_id})
+    await db.borrows.delete_many({"user_id": user_id})
+    return {"message": "User deleted"}
 
 # ===================== ENROLLMENT ROUTES =====================
 @api_router.post("/enrollments", response_model=EnrollmentResponse)
