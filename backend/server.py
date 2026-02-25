@@ -866,7 +866,7 @@ async def get_users(user: dict = Depends(require_roles([UserRole.ADMIN, UserRole
             school = await db.schools.find_one({"id": u["school_id"]}, {"_id": 0})
             if school:
                 school_name = school.get("name")
-        result.append(UserResponse(**u, role=UserRole(u["role"]), school_name=school_name))
+        result.append(UserResponse(**{**u, "school_name": school_name}))
     return result
 
 @api_router.get("/users/{user_id}", response_model=UserResponse)
@@ -881,7 +881,7 @@ async def get_user(user_id: str, user: dict = Depends(get_current_user)):
         if school:
             school_name = school.get("name")
     
-    return UserResponse(**target_user, role=UserRole(target_user["role"]), school_name=school_name)
+    return UserResponse(**{**target_user, "school_name": school_name})
 
 @api_router.get("/users/school/{school_id}")
 async def get_users_by_school(school_id: str, user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.TEACHER]))):
@@ -889,7 +889,7 @@ async def get_users_by_school(school_id: str, user: dict = Depends(require_roles
     school = await db.schools.find_one({"id": school_id}, {"_id": 0})
     school_name = school.get("name") if school else None
     
-    return [UserResponse(**u, role=UserRole(u["role"]), school_name=school_name) for u in users]
+    return [UserResponse(**{**u, "school_name": school_name}) for u in users]
 
 @api_router.get("/parent/children", response_model=List[UserResponse])
 async def get_children(user: dict = Depends(require_roles([UserRole.PARENT]))):
@@ -901,7 +901,7 @@ async def get_children(user: dict = Depends(require_roles([UserRole.PARENT]))):
             school = await db.schools.find_one({"id": c["school_id"]}, {"_id": 0})
             if school:
                 school_name = school.get("name")
-        result.append(UserResponse(**c, role=UserRole(c["role"]), school_name=school_name))
+        result.append(UserResponse(**{**c, "school_name": school_name}))
     return result
 
 @api_router.put("/users/{user_id}")
