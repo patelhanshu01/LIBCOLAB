@@ -1678,7 +1678,7 @@ async def seed_data():
     
     # NTHS Students (6)
     nths_students = [
-        {"name": "Tommy Anderson", "email": "student@school.com", "student_id": "NTHS-2024-001", "grade": 10, "parent_id": parent1_id},
+        {"name": "Tommy Anderson", "email": "t.anderson@nths.edu", "student_id": "NTHS-2024-001", "grade": 10, "parent_id": parent1_id},
         {"name": "Emma Wilson", "email": "e.wilson@nths.edu", "student_id": "NTHS-2024-002", "grade": 10, "parent_id": None},
         {"name": "Liam Brown", "email": "l.brown@nths.edu", "student_id": "NTHS-2024-003", "grade": 9, "parent_id": None},
         {"name": "Olivia Davis", "email": "o.davis@nths.edu", "student_id": "NTHS-2024-004", "grade": 11, "parent_id": None},
