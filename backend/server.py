@@ -14,6 +14,7 @@ import jwt
 import bcrypt
 from enum import Enum
 import random
+import uvicorn
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -28,7 +29,20 @@ JWT_SECRET = os.environ.get('JWT_SECRET', 'library-lms-secret-key-2024')
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
-app = FastAPI(title="Library LMS API")
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+import logging
+import os
+
+# Lifespan event handler (replaces deprecated on_event)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    yield
+    # Shutdown
+    client.close()
+
+app = FastAPI(title="Library LMS API", lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer()
 
@@ -2174,6 +2188,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+
+if __name__ == "__main__":
+    host = os.environ.get("BACKEND_HOST", "0.0.0.0")
+    port = int(os.environ.get("BACKEND_PORT", "8000"))
+    uvicorn.run("server:app", host=host, port=port, reload=True)

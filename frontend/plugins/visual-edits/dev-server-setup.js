@@ -67,7 +67,10 @@ function validateVariableEdit(change) {
   if (typeof change.newValue === "string") {
     // Disallow strings that look like code
     if (change.newValue.includes("${") || change.newValue.includes("`")) {
-      return { valid: false, error: "Template literals not allowed in newValue" };
+      return {
+        valid: false,
+        error: "Template literals not allowed in newValue",
+      };
     }
   }
 
@@ -93,15 +96,24 @@ function processVariableEdit(change, frontendRoot, babelTools) {
   } else if (change.sourceFile) {
     targetFile = resolveSourceFile(change.sourceFile, frontendRoot);
     if (!targetFile) {
-      return { success: false, error: `Could not resolve source file: ${change.sourceFile}` };
+      return {
+        success: false,
+        error: `Could not resolve source file: ${change.sourceFile}`,
+      };
     }
   } else {
-    return { success: false, error: "sourceFile or sourceFileAbs is required for variableEdit" };
+    return {
+      success: false,
+      error: "sourceFile or sourceFileAbs is required for variableEdit",
+    };
   }
 
   // Security check
   const normalizedTarget = path.normalize(targetFile);
-  if (!normalizedTarget.startsWith(frontendRoot) || normalizedTarget.includes("node_modules")) {
+  if (
+    !normalizedTarget.startsWith(frontendRoot) ||
+    normalizedTarget.includes("node_modules")
+  ) {
     return { success: false, error: `Forbidden path: ${targetFile}` };
   }
 
@@ -132,7 +144,10 @@ function processVariableEdit(change, frontendRoot, babelTools) {
       if (nodePath.node.id.name !== change.variableName) return;
 
       // If line is specified, verify it matches
-      if (change.variableLine && nodePath.node.loc?.start.line !== change.variableLine) {
+      if (
+        change.variableLine &&
+        nodePath.node.loc?.start.line !== change.variableLine
+      ) {
         return;
       }
 
@@ -160,7 +175,12 @@ function processVariableEdit(change, frontendRoot, babelTools) {
             return;
           }
 
-          const result = modifyObjectProperty(element, change.propertyPath, change.newValue, t);
+          const result = modifyObjectProperty(
+            element,
+            change.propertyPath,
+            change.newValue,
+            t,
+          );
           if (result.success) {
             oldValue = result.oldValue;
             modified = true;
@@ -184,7 +204,12 @@ function processVariableEdit(change, frontendRoot, babelTools) {
           return;
         }
 
-        const result = modifyObjectProperty(init, change.propertyPath, change.newValue, t);
+        const result = modifyObjectProperty(
+          init,
+          change.propertyPath,
+          change.newValue,
+          t,
+        );
         if (result.success) {
           oldValue = result.oldValue;
           modified = true;
@@ -209,7 +234,10 @@ function processVariableEdit(change, frontendRoot, babelTools) {
   });
 
   if (!modified) {
-    return { success: false, error: `Variable "${change.variableName}" not found or not editable` };
+    return {
+      success: false,
+      error: `Variable "${change.variableName}" not found or not editable`,
+    };
   }
 
   // Generate updated code
@@ -309,13 +337,13 @@ function jsonToAst(value, t) {
     return t.booleanLiteral(value);
   }
   if (Array.isArray(value)) {
-    return t.arrayExpression(value.map(v => jsonToAst(v, t)));
+    return t.arrayExpression(value.map((v) => jsonToAst(v, t)));
   }
   if (typeof value === "object") {
     return t.objectExpression(
       Object.entries(value).map(([k, v]) =>
-        t.objectProperty(t.identifier(k), jsonToAst(v, t))
-      )
+        t.objectProperty(t.identifier(k), jsonToAst(v, t)),
+      ),
     );
   }
   return t.nullLiteral();
@@ -354,18 +382,13 @@ function setupDevServer(config) {
         return true;
       }
 
-      // Allow all emergent.sh subdomains
-      if (origin.match(/^https:\/\/([a-zA-Z0-9-]+\.)*emergent\.sh$/)) {
+      // Allow localhost on any port for development
+      if (origin.match(/^https?:\/\/localhost(:\d+)?$/)) {
         return true;
       }
 
-      // Allow all emergentagent.com subdomains
-      if (origin.match(/^https:\/\/([a-zA-Z0-9-]+\.)*emergentagent\.com$/)) {
-        return true;
-      }
-
-      // Allow all appspot.com subdomains (for App Engine)
-      if (origin.match(/^https:\/\/([a-zA-Z0-9-]+\.)*appspot\.com$/)) {
+      // Allow 127.0.0.1 on any port
+      if (origin.match(/^https?:\/\/127\.0\.0\.1(:\d+)?$/)) {
         return true;
       }
 
@@ -408,19 +431,21 @@ function setupDevServer(config) {
         const traverse = require("@babel/traverse").default;
         const generate = require("@babel/generator").default;
         const t = require("@babel/types");
-        const frontendRoot = path.resolve(__dirname, '../..');
+        const frontendRoot = path.resolve(__dirname, "../..");
 
         // Helper function to get consistent relative path
         const getRelativePath = (absolutePath) => {
           const rel = path.relative(frontendRoot, absolutePath);
-          return '/' + rel;
+          return "/" + rel;
         };
 
         // ═══════════════════════════════════════════════════════════════════════
         // Process variableEdit changes separately (they target data source files)
         // ═══════════════════════════════════════════════════════════════════════
-        const variableEditChanges = changes.filter(c => c.type === "variableEdit");
-        const otherChanges = changes.filter(c => c.type !== "variableEdit");
+        const variableEditChanges = changes.filter(
+          (c) => c.type === "variableEdit",
+        );
+        const otherChanges = changes.filter((c) => c.type !== "variableEdit");
 
         for (const change of variableEditChanges) {
           console.log(`[backend] Processing variableEdit change:`, {
@@ -462,10 +487,16 @@ function setupDevServer(config) {
             // Commit the change to git
             const timestamp = Date.now();
             try {
-              execSync(`git -c user.name="visual-edit" -c user.email="support@emergent.sh" add "${result.file}"`);
-              execSync(`git -c user.name="visual-edit" -c user.email="support@emergent.sh" commit -m "visual_edit_variable_${timestamp}"`);
+              execSync(
+                `git -c user.name="visual-edit" -c user.email="dev@localhost.local" add "${result.file}"`,
+              );
+              execSync(
+                `git -c user.name="visual-edit" -c user.email="dev@localhost.local" commit -m "visual_edit_variable_${timestamp}"`,
+              );
             } catch (gitError) {
-              console.error(`Git commit failed for variableEdit: ${gitError.message}`);
+              console.error(
+                `Git commit failed for variableEdit: ${gitError.message}`,
+              );
             }
           } else {
             rejectedChanges.push({
@@ -587,13 +618,9 @@ function setupDevServer(config) {
                     return true;
                   });
 
-                node.children.forEach((child) =>
-                  sanitizeMetaAttributes(child),
-                );
+                node.children.forEach((child) => sanitizeMetaAttributes(child));
               } else if (t.isJSXFragment(node)) {
-                node.children.forEach((child) =>
-                  sanitizeMetaAttributes(child),
-                );
+                node.children.forEach((child) => sanitizeMetaAttributes(child));
               }
             };
 
@@ -608,9 +635,7 @@ function setupDevServer(config) {
 
               if (t.isJSXElement(wrapperExpression)) {
                 const innerChildren = wrapperExpression.children || [];
-                innerChildren.forEach((child) =>
-                  sanitizeMetaAttributes(child),
-                );
+                innerChildren.forEach((child) => sanitizeMetaAttributes(child));
                 return innerChildren;
               }
             } catch (parseError) {
@@ -663,8 +688,7 @@ function setupDevServer(config) {
                   // Find existing className attribute
                   let classAttr = path.node.attributes.find(
                     (attr) =>
-                      t.isJSXAttribute(attr) &&
-                      attr.name.name === "className",
+                      t.isJSXAttribute(attr) && attr.name.name === "className",
                   );
 
                   // Capture old className value
@@ -771,7 +795,10 @@ function setupDevServer(config) {
                     } else {
                       let targetTextNode = null;
                       for (const child of children) {
-                        if (t.isJSXText(child) && child.value.trim().length > 0) {
+                        if (
+                          t.isJSXText(child) &&
+                          child.value.trim().length > 0
+                        ) {
                           targetTextNode = child;
                           break;
                         }
@@ -779,17 +806,23 @@ function setupDevServer(config) {
 
                       const firstTextNode = targetTextNode;
                       const fallbackWhitespaceNode = children.find(
-                        (child) => t.isJSXText(child) && child.value.trim().length === 0,
+                        (child) =>
+                          t.isJSXText(child) && child.value.trim().length === 0,
                       );
 
                       const newContent = change.textContent;
                       let oldContent = "";
 
-                      const preserveWhitespace = (originalValue, updatedCore) => {
-                        const leadingWhitespace =
-                          (originalValue.match(/^\s*/) || [""])[0];
-                        const trailingWhitespace =
-                          (originalValue.match(/\s*$/) || [""])[0];
+                      const preserveWhitespace = (
+                        originalValue,
+                        updatedCore,
+                      ) => {
+                        const leadingWhitespace = (originalValue.match(
+                          /^\s*/,
+                        ) || [""])[0];
+                        const trailingWhitespace = (originalValue.match(
+                          /\s*$/,
+                        ) || [""])[0];
                         return `${leadingWhitespace}${updatedCore}${trailingWhitespace}`;
                       };
 
@@ -862,7 +895,7 @@ function setupDevServer(config) {
                   }
                 } else {
                   // Track rejected change
-                  const reason = `Change must have valid type ('className', 'textContent', or 'content'). Received type: ${change.type || 'undefined'}`;
+                  const reason = `Change must have valid type ('className', 'textContent', or 'content'). Received type: ${change.type || "undefined"}`;
                   rejectedChanges.push({
                     change,
                     reason,
@@ -905,8 +938,12 @@ function setupDevServer(config) {
           const timestamp = Date.now();
           try {
             // Use -c flag for per-invocation git config to avoid modifying any config
-            execSync(`git -c user.name="visual-edit" -c user.email="support@emergent.sh" add "${targetFile}"`);
-            execSync(`git -c user.name="visual-edit" -c user.email="support@emergent.sh" commit -m "visual_edit_${timestamp}"`);
+            execSync(
+              `git -c user.name="visual-edit" -c user.email="dev@localhost.local" add "${targetFile}"`,
+            );
+            execSync(
+              `git -c user.name="visual-edit" -c user.email="dev@localhost.local" commit -m "visual_edit_${timestamp}"`,
+            );
           } catch (gitError) {
             console.error(`Git commit failed: ${gitError.message}`);
             // Continue even if git fails - file write succeeded
