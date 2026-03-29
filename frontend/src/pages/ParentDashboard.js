@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Users, BookOpen, GraduationCap, Award, TrendingUp, Star, Trophy, Flame, Zap, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -21,6 +22,7 @@ const BADGE_CONFIG = {
 
 const ParentDashboard = () => {
   const { token } = useAuth();
+  const location = useLocation();
   const [children, setChildren] = useState([]);
   const [selectedChild, setSelectedChild] = useState(null);
   const [childProgress, setChildProgress] = useState(null);
@@ -101,14 +103,30 @@ const ParentDashboard = () => {
   const quizResults = cp?.quiz_results || [];
   const perfSummary = cp?.performance_summary || {};
   const childBadges = cp?.child?.badges || [];
+  const parentRoute = location.pathname.replace(/\/+$/, '');
+  const parentSection = parentRoute.split('/')[2] || 'dashboard';
+  const isDashboardPage = parentSection === 'dashboard';
+  const isQuizzesPage = parentSection === 'quizzes';
+  const isBooksPage = parentSection === 'books';
+  const isActivityPage = parentSection === 'activity';
 
   return (
     <DashboardLayout>
       <div className="space-y-6" data-testid="parent-dashboard">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Parent Dashboard</h1>
-            <p className="text-muted-foreground mt-1">Monitor your children's learning progress</p>
+            <h1 className="text-3xl font-bold tracking-tight">
+              {isQuizzesPage ? 'Quiz Results' : isBooksPage ? 'Books' : isActivityPage ? 'Activity' : 'Parent Dashboard'}
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              {isQuizzesPage
+                ? "Review your child's quiz performance"
+                : isBooksPage
+                ? "Track your child's borrowed books"
+                : isActivityPage
+                ? "Follow your child's recent learning activity"
+                : "Monitor your children's learning progress"}
+            </p>
           </div>
           {children.length > 1 && (
             <Select value={selectedChild} onValueChange={setSelectedChild}>
@@ -198,16 +216,8 @@ const ParentDashboard = () => {
               </Card>
             </div>
 
-            <Tabs defaultValue="progress" className="w-full">
-              <TabsList>
-                <TabsTrigger value="progress" data-testid="parent-tab-progress">Progress</TabsTrigger>
-                <TabsTrigger value="quizzes" data-testid="parent-tab-quizzes">Quiz Results ({quizResults.length})</TabsTrigger>
-                <TabsTrigger value="books" data-testid="parent-tab-books">Books ({activeBorrows.length})</TabsTrigger>
-                <TabsTrigger value="activity" data-testid="parent-tab-activity">Activity</TabsTrigger>
-              </TabsList>
-
-              {/* Progress Tab */}
-              <TabsContent value="progress" className="space-y-4 mt-4">
+            {isDashboardPage ? (
+              <div className="space-y-4 mt-4">
                 {activeEnrollments.length > 0 && (
                   <Card>
                     <CardHeader><CardTitle className="text-base">Active Courses</CardTitle></CardHeader>
@@ -246,10 +256,8 @@ const ParentDashboard = () => {
                 {activeEnrollments.length === 0 && completedEnrollments.length === 0 && (
                   <Card className="text-center py-8"><CardContent><p className="text-muted-foreground">No course enrollments yet</p></CardContent></Card>
                 )}
-              </TabsContent>
-
-              {/* Quiz Results Tab */}
-              <TabsContent value="quizzes" className="mt-4">
+              </div>
+            ) : isQuizzesPage ? (
                 <Card>
                   <CardHeader><CardTitle>Quiz Results</CardTitle></CardHeader>
                   <CardContent>
@@ -289,10 +297,7 @@ const ParentDashboard = () => {
                     )}
                   </CardContent>
                 </Card>
-              </TabsContent>
-
-              {/* Books Tab */}
-              <TabsContent value="books" className="mt-4">
+            ) : isBooksPage ? (
                 <Card>
                   <CardHeader><CardTitle>Borrowed Books</CardTitle></CardHeader>
                   <CardContent>
@@ -320,10 +325,7 @@ const ParentDashboard = () => {
                     )}
                   </CardContent>
                 </Card>
-              </TabsContent>
-
-              {/* Activity Tab */}
-              <TabsContent value="activity" className="mt-4">
+            ) : isActivityPage ? (
                 <Card>
                   <CardHeader><CardTitle>Recent Activity</CardTitle></CardHeader>
                   <CardContent>
@@ -344,8 +346,7 @@ const ParentDashboard = () => {
                     )}
                   </CardContent>
                 </Card>
-              </TabsContent>
-            </Tabs>
+            ) : null}
           </>
         )}
       </div>

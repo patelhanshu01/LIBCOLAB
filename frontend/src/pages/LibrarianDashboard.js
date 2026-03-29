@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { BookOpen, TrendingUp, CheckCircle, Clock, Plus, Pencil, Trash2, X, Search, Filter } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -25,6 +26,7 @@ const emptyBook = {
 
 const LibrarianDashboard = () => {
   const { token } = useAuth();
+  const location = useLocation();
   const [books, setBooks] = useState([]);
   const [borrows, setBorrows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -41,7 +43,7 @@ const LibrarianDashboard = () => {
   const [formatFilter, setFormatFilter] = useState('all');
   const [stockFilter, setStockFilter] = useState('all');
 
-  const headers = { Authorization: `Bearer ${token}` };
+  const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -56,7 +58,7 @@ const LibrarianDashboard = () => {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [headers]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -152,10 +154,15 @@ const LibrarianDashboard = () => {
     return true;
   });
 
-  const pendingBorrows = borrows.filter(b => b.status === 'pending');
-  const activeBorrows = borrows.filter(b => ['approved', 'borrowed'].includes(b.status));
+  const pendingBorrows = borrows.filter(b => b.status === 'pending' && b.borrow_type !== 'buy');
+  const activeBorrows = borrows.filter(b => ['approved', 'borrowed'].includes(b.status) && b.borrow_type !== 'buy');
   const lowStockBooks = books.filter(b => b.format !== 'digital' && b.available_copies < 2);
   const hasActiveFilters = searchQuery || categoryFilter !== 'all' || formatFilter !== 'all' || stockFilter !== 'all';
+  const librarianRoute = location.pathname.replace(/\/+$/, '');
+  const librarianSection = librarianRoute.split('/')[2] || 'dashboard';
+  const isActiveBorrowsPage = librarianSection === 'active-borrows';
+  const isBorrowRequestsPage = librarianSection === 'borrows';
+  const isDashboardPage = librarianSection === 'dashboard';
 
   if (loading) {
     return (
@@ -175,8 +182,16 @@ const LibrarianDashboard = () => {
       <div className="space-y-6" data-testid="librarian-dashboard">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Librarian Dashboard</h1>
-            <p className="text-muted-foreground mt-1">Manage inventory, borrow requests, and returns</p>
+            <h1 className="text-3xl font-bold tracking-tight">
+              {isActiveBorrowsPage ? 'Active Borrows' : isBorrowRequestsPage ? 'Borrow Requests' : 'Librarian Dashboard'}
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              {isActiveBorrowsPage
+                ? 'Track current borrowed books and process returns'
+                : isBorrowRequestsPage
+                ? 'Review pending book requests and approve them'
+                : 'Manage inventory, borrow requests, and returns'}
+            </p>
           </div>
           <Button className="gap-2" onClick={openAddBook} data-testid="add-book-btn">
             <Plus className="w-4 h-4" /> Add Book
@@ -184,22 +199,23 @@ const LibrarianDashboard = () => {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card><CardContent className="pt-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Total Books</p><p className="text-3xl font-bold mt-1">{books.length}</p></div><div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center"><BookOpen className="w-6 h-6 text-primary" /></div></div></CardContent></Card>
-          <Card><CardContent className="pt-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Pending</p><p className="text-3xl font-bold mt-1">{pendingBorrows.length}</p></div><div className="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center"><Clock className="w-6 h-6 text-amber-600" /></div></div></CardContent></Card>
-          <Card><CardContent className="pt-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Active Borrows</p><p className="text-3xl font-bold mt-1">{activeBorrows.length}</p></div><div className="w-12 h-12 rounded-xl bg-teal-500/10 flex items-center justify-center"><CheckCircle className="w-6 h-6 text-teal-600" /></div></div></CardContent></Card>
-          <Card><CardContent className="pt-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Low Stock</p><p className="text-3xl font-bold mt-1">{lowStockBooks.length}</p></div><div className="w-12 h-12 rounded-xl bg-orange-500/10 flex items-center justify-center"><TrendingUp className="w-6 h-6 text-orange-600" /></div></div></CardContent></Card>
-        </div>
+        {isDashboardPage && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card><CardContent className="pt-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Total Books</p><p className="text-3xl font-bold mt-1">{books.length}</p></div><div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center"><BookOpen className="w-6 h-6 text-primary" /></div></div></CardContent></Card>
+            <Card><CardContent className="pt-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Active Borrows</p><p className="text-3xl font-bold mt-1">{activeBorrows.length}</p></div><div className="w-12 h-12 rounded-xl bg-teal-500/10 flex items-center justify-center"><CheckCircle className="w-6 h-6 text-teal-600" /></div></div></CardContent></Card>
+            <Card><CardContent className="pt-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Low Stock</p><p className="text-3xl font-bold mt-1">{lowStockBooks.length}</p></div><div className="w-12 h-12 rounded-xl bg-orange-500/10 flex items-center justify-center"><TrendingUp className="w-6 h-6 text-orange-600" /></div></div></CardContent></Card>
+          </div>
+        )}
 
-        <Tabs defaultValue="inventory">
-          <TabsList>
-            <TabsTrigger value="inventory" className="gap-2" data-testid="inventory-tab"><BookOpen className="w-4 h-4" /> Inventory ({filteredBooks.length}{hasActiveFilters ? `/${books.length}` : ''})</TabsTrigger>
-            <TabsTrigger value="pending" className="gap-2" data-testid="pending-tab"><Clock className="w-4 h-4" /> Pending ({pendingBorrows.length})</TabsTrigger>
-            <TabsTrigger value="active" className="gap-2" data-testid="active-tab"><CheckCircle className="w-4 h-4" /> Active ({activeBorrows.length})</TabsTrigger>
-          </TabsList>
+        {isDashboardPage ? (
+          <Tabs defaultValue="inventory">
+            <TabsList>
+              <TabsTrigger value="inventory" className="gap-2" data-testid="inventory-tab"><BookOpen className="w-4 h-4" /> Inventory ({filteredBooks.length}{hasActiveFilters ? `/${books.length}` : ''})</TabsTrigger>
+              <TabsTrigger value="low-stock" className="gap-2" data-testid="low-stock-tab"><TrendingUp className="w-4 h-4" /> Low Stock ({lowStockBooks.length})</TabsTrigger>
+            </TabsList>
 
-          {/* Inventory */}
-          <TabsContent value="inventory" className="mt-4">
+            {/* Inventory */}
+            <TabsContent value="inventory" className="mt-4">
             <Card>
               <CardHeader className="pb-4">
                 <div className="flex flex-col md:flex-row gap-3">
@@ -318,10 +334,66 @@ const LibrarianDashboard = () => {
                 )}
               </CardContent>
             </Card>
-          </TabsContent>
+            </TabsContent>
 
-          {/* Pending Requests */}
-          <TabsContent value="pending" className="mt-4">
+            <TabsContent value="low-stock" className="mt-4">
+              <Card>
+                <CardContent className="pt-6">
+                  {lowStockBooks.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Title</TableHead>
+                            <TableHead>Author</TableHead>
+                            <TableHead>Category</TableHead>
+                            <TableHead>Available</TableHead>
+                            <TableHead>Location</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {lowStockBooks.map((book) => (
+                            <TableRow key={book.id}>
+                              <TableCell className="font-medium max-w-[220px] truncate">{book.title}</TableCell>
+                              <TableCell>{book.author}</TableCell>
+                              <TableCell>
+                                <Badge className={book.category === 'academic' ? 'bg-teal-100 text-teal-800 hover:bg-teal-100' : 'bg-orange-100 text-orange-800 hover:bg-orange-100'}>
+                                  {book.category}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <span className="text-orange-600 font-medium">{book.available_copies}/{book.total_copies}</span>
+                              </TableCell>
+                              <TableCell className="font-mono text-sm">{book.shelf_location || '-'}</TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => openEditBook(book)}
+                                  data-testid={`edit-low-stock-book-${book.id}`}
+                                >
+                                  <Pencil className="w-4 h-4" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <TrendingUp className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                      <h3 className="text-lg font-medium mb-1">No Low Stock Books</h3>
+                      <p className="text-muted-foreground">All physical books currently have healthy stock levels.</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+          </Tabs>
+        ) : isBorrowRequestsPage ? (
             <Card>
               <CardContent className="pt-6">
                 {pendingBorrows.length > 0 ? (
@@ -346,10 +418,7 @@ const LibrarianDashboard = () => {
                 ) : <p className="text-muted-foreground text-center py-8">No pending requests</p>}
               </CardContent>
             </Card>
-          </TabsContent>
-
-          {/* Active Borrows */}
-          <TabsContent value="active" className="mt-4">
+        ) : isActiveBorrowsPage ? (
             <Card>
               <CardContent className="pt-6">
                 {activeBorrows.length > 0 ? (
@@ -370,8 +439,7 @@ const LibrarianDashboard = () => {
                 ) : <p className="text-muted-foreground text-center py-8">No active borrows</p>}
               </CardContent>
             </Card>
-          </TabsContent>
-        </Tabs>
+        ) : null}
       </div>
 
       {/* Book Dialog */}

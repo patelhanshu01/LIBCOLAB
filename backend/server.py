@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from typing import List, Optional, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
+import re
 import jwt
 import bcrypt
 from enum import Enum
@@ -105,7 +106,7 @@ class SchoolResponse(BaseModel):
 
 # School Verification Models
 class SchoolVerifyRequest(BaseModel):
-    school_id: str
+    school_id: Optional[str] = None
     student_id: Optional[str] = None
     employee_id: Optional[str] = None
     school_email: EmailStr
@@ -135,6 +136,7 @@ class UserCreate(BaseModel):
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+    role: Optional[UserRole] = None
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -218,6 +220,8 @@ class BookCreate(BaseModel):
     title: str
     author: str
     description: Optional[str] = None
+    overview: Optional[str] = None
+    content: Optional[str] = None
     category: BookCategory
     pricing_type: PricingType
     price: float = 0.0
@@ -238,6 +242,8 @@ class BookResponse(BaseModel):
     title: str
     author: str
     description: Optional[str] = None
+    overview: Optional[str] = None
+    content: Optional[str] = None
     category: BookCategory
     pricing_type: PricingType
     price: float
@@ -476,29 +482,44 @@ async def get_school(school_id: str):
 
 @api_router.post("/auth/school-verify", response_model=TokenResponse)
 async def verify_school_login(data: SchoolVerifyRequest):
-    # Find school
-    school = await db.schools.find_one({"id": data.school_id}, {"_id": 0})
-    if not school:
-        raise HTTPException(status_code=404, detail="School not found")
-    
-    if not school.get("is_partner", False):
-        raise HTTPException(status_code=403, detail="School is not a partner institution")
-    
-    # Check if email matches school domain
-    school_domain = school.get("email_domain", "")
-    if school_domain and not data.school_email.endswith(school_domain):
-        raise HTTPException(status_code=400, detail=f"Email must be from {school_domain}")
-    
-    # Find user by school credentials
-    query = {"school_id": data.school_id, "email": data.school_email}
-    if data.student_id:
-        query["student_id"] = data.student_id
-    if data.employee_id:
-        query["employee_id"] = data.employee_id
+    school_roles = {UserRole.STUDENT, UserRole.TEACHER}
+    school = None
+
+    if data.role in school_roles:
+        if not data.school_id:
+            raise HTTPException(status_code=400, detail="School is required for student and teacher login")
+
+        # Find school
+        school = await db.schools.find_one({"id": data.school_id}, {"_id": 0})
+        if not school:
+            raise HTTPException(status_code=404, detail="School not found")
+        
+        if not school.get("is_partner", False):
+            raise HTTPException(status_code=403, detail="School is not a partner institution")
+        
+        # Check if email matches school domain
+        school_domain = school.get("email_domain", "")
+        if school_domain and not data.school_email.endswith(school_domain):
+            raise HTTPException(status_code=400, detail=f"Email must be from {school_domain}")
+        
+        # Find user by school credentials
+        query = {
+            "school_id": data.school_id,
+            "email": data.school_email,
+            "role": data.role.value
+        }
+        if data.student_id:
+            query["student_id"] = data.student_id
+        if data.employee_id:
+            query["employee_id"] = data.employee_id
+    else:
+        query = {"email": data.school_email, "role": data.role.value}
     
     user = await db.users.find_one(query, {"_id": 0})
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid school credentials. Please check your Student/Employee ID and email.")
+        if data.role in school_roles:
+            raise HTTPException(status_code=401, detail="Invalid school credentials. Please check your Student/Employee ID and email.")
+        raise HTTPException(status_code=401, detail="Invalid email or password for the selected role.")
     
     if not verify_password(data.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid password")
@@ -521,7 +542,7 @@ async def verify_school_login(data: SchoolVerifyRequest):
         department=user.get("department"),
         parent_id=user.get("parent_id"),
         school_id=user.get("school_id"),
-        school_name=school.get("name"),
+        school_name=school.get("name") if school else None,
         student_id=user.get("student_id"),
         badges=user.get("badges", []),
         created_at=user["created_at"]
@@ -591,6 +612,9 @@ async def login(credentials: UserLogin):
     user = await db.users.find_one({"email": credentials.email}, {"_id": 0})
     if not user or not verify_password(credentials.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if credentials.role and user["role"] != credentials.role.value:
+        raise HTTPException(status_code=403, detail=f"This login is only available for {credentials.role.value} accounts")
     
     await log_activity(user["id"], "login", "User logged in")
     await check_and_award_badges(user["id"])
@@ -923,7 +947,17 @@ async def update_user(user_id: str, updates: dict, user: dict = Depends(get_curr
     if user["id"] != user_id and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    allowed_fields = ["name", "phone", "grade_level", "specialization"]
+    allowed_fields = [
+        "name",
+        "email",
+        "phone",
+        "grade_level",
+        "specialization",
+        "school_id",
+        "student_id",
+        "employee_id",
+        "department",
+    ]
     update_data = {k: v for k, v in updates.items() if k in allowed_fields}
     
     await db.users.update_one({"id": user_id}, {"$set": update_data})
@@ -970,6 +1004,7 @@ async def get_books(
     books = await db.books.find(query, {"_id": 0}).to_list(1000)
     result = []
     for b in books:
+        b = normalize_book_content(b)
         b["category"] = BookCategory(b["category"])
         b["pricing_type"] = PricingType(b["pricing_type"])
         b["format"] = BookFormat(b["format"])
@@ -981,6 +1016,7 @@ async def get_book(book_id: str):
     book = await db.books.find_one({"id": book_id}, {"_id": 0})
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
+    book = normalize_book_content(book)
     book["category"] = BookCategory(book["category"])
     book["pricing_type"] = PricingType(book["pricing_type"])
     book["format"] = BookFormat(book["format"])
@@ -1008,7 +1044,8 @@ async def create_borrow(borrow: BorrowCreate, user: dict = Depends(get_current_u
     
     borrow_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
-    due_date = now + timedelta(days=14)
+    is_purchase = borrow.borrow_type == PricingType.BUY.value
+    due_date = None if is_purchase else now + timedelta(days=14)
     
     borrow_doc = {
         "id": borrow_id,
@@ -1017,18 +1054,26 @@ async def create_borrow(borrow: BorrowCreate, user: dict = Depends(get_current_u
         "book_title": book["title"],
         "user_name": user["name"],
         "borrow_type": borrow.borrow_type,
-        "status": BorrowStatus.PENDING.value,
-        "issue_date": None,
-        "due_date": due_date.isoformat(),
+        "status": BorrowStatus.APPROVED.value if is_purchase else BorrowStatus.PENDING.value,
+        "issue_date": now.isoformat() if is_purchase else None,
+        "due_date": due_date.isoformat() if due_date else None,
         "return_date": None,
         "created_at": now.isoformat()
     }
     
     await db.borrows.insert_one(borrow_doc)
-    await log_activity(user["id"], "borrow", f"Requested to borrow: {book['title']}", {"book_id": borrow.book_id})
+    if is_purchase and book["format"] in ["physical", "both"]:
+        await db.books.update_one({"id": borrow.book_id}, {"$inc": {"available_copies": -1}})
+
+    await log_activity(
+        user["id"],
+        "borrow",
+        f"{'Purchased' if is_purchase else 'Requested to borrow'}: {book['title']}",
+        {"book_id": borrow.book_id}
+    )
     await check_and_award_badges(user["id"])
     
-    borrow_doc["status"] = BorrowStatus.PENDING
+    borrow_doc["status"] = BorrowStatus.APPROVED if is_purchase else BorrowStatus.PENDING
     return BorrowResponse(**borrow_doc)
 
 @api_router.get("/borrows", response_model=List[BorrowResponse])
@@ -1066,6 +1111,15 @@ async def return_book(borrow_id: str, user: dict = Depends(get_current_user)):
     borrow = await db.borrows.find_one({"id": borrow_id}, {"_id": 0})
     if not borrow:
         raise HTTPException(status_code=404, detail="Borrow record not found")
+
+    if user["role"] not in ["admin", "librarian"] and borrow["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to return this book")
+
+    if borrow.get("borrow_type") == PricingType.BUY.value:
+        raise HTTPException(status_code=400, detail="Purchased books cannot be returned")
+
+    if borrow.get("status") == BorrowStatus.RETURNED.value:
+        raise HTTPException(status_code=400, detail="Book has already been returned")
     
     now = datetime.now(timezone.utc)
     await db.borrows.update_one(
@@ -1103,6 +1157,7 @@ async def get_courses(
     subject: Optional[str] = None,
     teacher_id: Optional[str] = None
 ):
+    await ensure_demo_courses_catalog()
     query = {}
     if grade:
         query["grade_levels"] = grade
@@ -1112,14 +1167,15 @@ async def get_courses(
         query["teacher_id"] = teacher_id
     
     courses = await db.courses.find(query, {"_id": 0}).to_list(1000)
-    return [CourseResponse(**c) for c in courses]
+    return [CourseResponse(**normalize_demo_course(c)) for c in courses]
 
 @api_router.get("/courses/{course_id}", response_model=CourseResponse)
 async def get_course(course_id: str):
+    await ensure_demo_courses_catalog()
     course = await db.courses.find_one({"id": course_id}, {"_id": 0})
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    return CourseResponse(**course)
+    return CourseResponse(**normalize_demo_course(course))
 
 @api_router.post("/courses/{course_id}/modules")
 async def add_module(course_id: str, module: ModuleCreate, user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.TEACHER]))):
@@ -1245,6 +1301,7 @@ async def admin_delete_user(user_id: str, admin: dict = Depends(require_roles([U
 # ===================== ENROLLMENT ROUTES =====================
 @api_router.post("/enrollments", response_model=EnrollmentResponse)
 async def enroll(enrollment: EnrollmentCreate, user: dict = Depends(get_current_user)):
+    await ensure_demo_courses_catalog()
     course = await db.courses.find_one({"id": enrollment.course_id}, {"_id": 0})
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -1274,12 +1331,39 @@ async def enroll(enrollment: EnrollmentCreate, user: dict = Depends(get_current_
 
 @api_router.get("/enrollments", response_model=List[EnrollmentResponse])
 async def get_enrollments(user: dict = Depends(get_current_user)):
+    await ensure_demo_courses_catalog()
     if user["role"] in ["admin", "teacher"]:
         enrollments = await db.enrollments.find({}, {"_id": 0}).to_list(1000)
     else:
         enrollments = await db.enrollments.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+
+    course_ids = list({e["course_id"] for e in enrollments})
+    courses = await db.courses.find({"id": {"$in": course_ids}}, {"_id": 0}).to_list(1000)
+    course_map = {course["id"]: normalize_demo_course(course) for course in courses}
+
     result = []
     for e in enrollments:
+        course = course_map.get(e["course_id"])
+        if course:
+            valid_module_ids = {module["id"] for module in course.get("modules", [])}
+            cleaned_modules = [mid for mid in e.get("completed_modules", []) if mid in valid_module_ids]
+            total_modules = len(valid_module_ids)
+            progress = min((len(cleaned_modules) / total_modules * 100) if total_modules > 0 else 0, 100)
+            final_quiz = course.get("quizzes", [])[-1] if course.get("quizzes") else None
+            final_quiz_passed = final_quiz and e.get("quiz_scores", {}).get(final_quiz["id"], {}).get("passed")
+            status = EnrollmentStatus.COMPLETED.value if progress >= 100 and (final_quiz_passed or not final_quiz) else (
+                EnrollmentStatus.IN_PROGRESS.value if progress > 0 else e["status"]
+            )
+
+            if cleaned_modules != e.get("completed_modules", []) or progress != e.get("progress_percentage") or status != e.get("status"):
+                await db.enrollments.update_one(
+                    {"id": e["id"]},
+                    {"$set": {"completed_modules": cleaned_modules, "progress_percentage": progress, "status": status}}
+                )
+                e["completed_modules"] = cleaned_modules
+                e["progress_percentage"] = progress
+                e["status"] = status
+
         e["status"] = EnrollmentStatus(e["status"])
         result.append(EnrollmentResponse(**e))
     return result
@@ -1293,17 +1377,23 @@ async def update_progress(enrollment_id: str, module_id: str, user: dict = Depen
     course = await db.courses.find_one({"id": enrollment["course_id"]})
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    course = normalize_demo_course(course)
     
-    completed_modules = enrollment.get("completed_modules", [])
-    if module_id not in completed_modules:
+    valid_module_ids = {module["id"] for module in course.get("modules", [])}
+    completed_modules = [mid for mid in enrollment.get("completed_modules", []) if mid in valid_module_ids]
+    if module_id in valid_module_ids and module_id not in completed_modules:
         completed_modules.append(module_id)
     
     total_modules = len(course.get("modules", []))
     progress = (len(completed_modules) / total_modules * 100) if total_modules > 0 else 0
+    progress = min(progress, 100)
     
     status = EnrollmentStatus.IN_PROGRESS.value
     if progress >= 100:
-        status = EnrollmentStatus.COMPLETED.value
+        final_quiz = course.get("quizzes", [])[-1] if course.get("quizzes") else None
+        quiz_scores = enrollment.get("quiz_scores", {})
+        final_quiz_passed = final_quiz and quiz_scores.get(final_quiz["id"], {}).get("passed")
+        status = EnrollmentStatus.COMPLETED.value if final_quiz_passed or not final_quiz else EnrollmentStatus.IN_PROGRESS.value
     
     await db.enrollments.update_one(
         {"id": enrollment_id},
@@ -1324,6 +1414,7 @@ async def submit_quiz(enrollment_id: str, quiz_id: str, answers: List[int], user
     course = await db.courses.find_one({"id": enrollment["course_id"]})
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    course = normalize_demo_course(course)
     
     quiz = None
     for q in course.get("quizzes", []):
@@ -1333,6 +1424,10 @@ async def submit_quiz(enrollment_id: str, quiz_id: str, answers: List[int], user
     
     if not quiz:
         raise HTTPException(status_code=404, detail="Quiz not found")
+
+    total_modules = len(course.get("modules", []))
+    if len(enrollment.get("completed_modules", [])) < total_modules:
+        raise HTTPException(status_code=400, detail="Complete all course modules before taking the final quiz")
     
     # Calculate score
     correct = 0
@@ -1362,10 +1457,20 @@ async def submit_quiz(enrollment_id: str, quiz_id: str, answers: List[int], user
     }
     await db.quiz_results.insert_one(quiz_result)
     
-    # Update enrollment quiz scores
+    # Update enrollment quiz scores and only mark complete once the final quiz is passed
     quiz_scores = enrollment.get("quiz_scores", {})
     quiz_scores[quiz_id] = {"score": score, "passed": passed, "percentage": percentage}
-    await db.enrollments.update_one({"id": enrollment_id}, {"$set": {"quiz_scores": quiz_scores}})
+    final_quiz = course.get("quizzes", [])[-1] if course.get("quizzes") else None
+    status = enrollment.get("status", EnrollmentStatus.IN_PROGRESS.value)
+    if final_quiz and final_quiz["id"] == quiz_id and passed and len(enrollment.get("completed_modules", [])) >= total_modules:
+        status = EnrollmentStatus.COMPLETED.value
+    elif len(enrollment.get("completed_modules", [])) >= total_modules:
+        status = EnrollmentStatus.IN_PROGRESS.value
+
+    await db.enrollments.update_one(
+        {"id": enrollment_id},
+        {"$set": {"quiz_scores": quiz_scores, "status": status}}
+    )
     
     await log_activity(user["id"], "quiz_complete", f"Completed quiz: {quiz['title']} - {percentage:.0f}%", {"quiz_id": quiz_id, "score": percentage})
     await check_and_award_badges(user["id"])
@@ -1649,6 +1754,18 @@ async def seed_data():
         "badges": [],
         "created_at": datetime.now(timezone.utc).isoformat()
     })
+
+    # ==================== GUEST USER ====================
+    guest_id = str(uuid.uuid4())
+    await db.users.insert_one({
+        "id": guest_id,
+        "email": "guest@libcollab.com",
+        "password": hash_password("guest123"),
+        "name": "Guest User",
+        "role": "guest",
+        "badges": [],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
     
     # ==================== LIBRARIAN ====================
     librarian_id = str(uuid.uuid4())
@@ -1855,22 +1972,22 @@ async def seed_data():
     
     # ==================== BOOKS ====================
     academic_books = [
-        {"title": "Algebra Fundamentals", "author": "Dr. Math Expert", "description": "Complete guide to algebra for high school students", "category": "academic", "pricing_type": "free", "price": 0, "format": "both", "grade_levels": [8, 9, 10], "subjects": ["Mathematics"], "available_copies": 5, "total_copies": 5, "shelf_location": "A1-01"},
-        {"title": "World History: Modern Era", "author": "Prof. History Buff", "description": "Comprehensive world history textbook", "category": "academic", "pricing_type": "free", "price": 0, "format": "digital", "grade_levels": [9, 10, 11], "subjects": ["History"], "file_url": "https://example.com/history.pdf"},
-        {"title": "Biology: Life Sciences", "author": "Dr. Science Lab", "description": "Introduction to biology and life sciences", "category": "academic", "pricing_type": "free", "price": 0, "format": "both", "grade_levels": [9, 10], "subjects": ["Biology", "Science"], "available_copies": 3, "total_copies": 3, "shelf_location": "B2-03"},
-        {"title": "English Literature Anthology", "author": "Literature Council", "description": "Collection of classic English literature", "category": "academic", "pricing_type": "free", "price": 0, "format": "physical", "grade_levels": [10, 11, 12], "subjects": ["English"], "available_copies": 8, "total_copies": 8, "shelf_location": "C1-05"},
-        {"title": "Physics for Beginners", "author": "Dr. Newton Jr.", "description": "Introduction to physics concepts", "category": "academic", "pricing_type": "free", "price": 0, "format": "both", "grade_levels": [8, 9], "subjects": ["Physics", "Science"], "available_copies": 4, "total_copies": 4, "shelf_location": "B1-02"},
-        {"title": "Chemistry Essentials", "author": "Dr. Marie Curie II", "description": "Fundamental chemistry concepts", "category": "academic", "pricing_type": "free", "price": 0, "format": "both", "grade_levels": [10, 11], "subjects": ["Chemistry", "Science"], "available_copies": 6, "total_copies": 6, "shelf_location": "B3-01"},
-        {"title": "Calculus Made Easy", "author": "Prof. Leibniz", "description": "Step-by-step calculus guide", "category": "academic", "pricing_type": "free", "price": 0, "format": "digital", "grade_levels": [11, 12], "subjects": ["Mathematics"]},
-        {"title": "Canadian History", "author": "Dr. Maple Leaf", "description": "History of Canada from confederation to present", "category": "academic", "pricing_type": "free", "price": 0, "format": "both", "grade_levels": [8, 9, 10], "subjects": ["History"], "available_copies": 5, "total_copies": 5, "shelf_location": "C2-04"},
+        {"title": "Algebra Fundamentals", "author": "Dr. Math Expert", "description": "Complete guide to algebra for high school students", "content": BOOK_CONTENT_BLUEPRINTS["Algebra Fundamentals"], "category": "academic", "pricing_type": "free", "price": 0, "format": "both", "grade_levels": [8, 9, 10], "subjects": ["Mathematics"], "available_copies": 5, "total_copies": 5, "shelf_location": "A1-01"},
+        {"title": "World History: Modern Era", "author": "Prof. History Buff", "description": "Comprehensive world history textbook", "content": BOOK_CONTENT_BLUEPRINTS["World History: Modern Era"], "category": "academic", "pricing_type": "free", "price": 0, "format": "digital", "grade_levels": [9, 10, 11], "subjects": ["History"], "file_url": "https://example.com/history.pdf"},
+        {"title": "Biology: Life Sciences", "author": "Dr. Science Lab", "description": "Introduction to biology and life sciences", "content": BOOK_CONTENT_BLUEPRINTS["Biology: Life Sciences"], "category": "academic", "pricing_type": "free", "price": 0, "format": "both", "grade_levels": [9, 10], "subjects": ["Biology", "Science"], "available_copies": 3, "total_copies": 3, "shelf_location": "B2-03"},
+        {"title": "English Literature Anthology", "author": "Literature Council", "description": "Collection of classic English literature", "content": BOOK_CONTENT_BLUEPRINTS["English Literature Anthology"], "category": "academic", "pricing_type": "free", "price": 0, "format": "physical", "grade_levels": [10, 11, 12], "subjects": ["English"], "available_copies": 8, "total_copies": 8, "shelf_location": "C1-05"},
+        {"title": "Physics for Beginners", "author": "Dr. Newton Jr.", "description": "Introduction to physics concepts", "content": BOOK_CONTENT_BLUEPRINTS["Physics for Beginners"], "category": "academic", "pricing_type": "free", "price": 0, "format": "both", "grade_levels": [8, 9], "subjects": ["Physics", "Science"], "available_copies": 4, "total_copies": 4, "shelf_location": "B1-02"},
+        {"title": "Chemistry Essentials", "author": "Dr. Marie Curie II", "description": "Fundamental chemistry concepts", "content": BOOK_CONTENT_BLUEPRINTS["Chemistry Essentials"], "category": "academic", "pricing_type": "free", "price": 0, "format": "both", "grade_levels": [10, 11], "subjects": ["Chemistry", "Science"], "available_copies": 6, "total_copies": 6, "shelf_location": "B3-01"},
+        {"title": "Calculus Made Easy", "author": "Prof. Leibniz", "description": "Step-by-step calculus guide", "content": BOOK_CONTENT_BLUEPRINTS["Calculus Made Easy"], "category": "academic", "pricing_type": "free", "price": 0, "format": "digital", "grade_levels": [11, 12], "subjects": ["Mathematics"]},
+        {"title": "Canadian History", "author": "Dr. Maple Leaf", "description": "History of Canada from confederation to present", "content": BOOK_CONTENT_BLUEPRINTS["Canadian History"], "category": "academic", "pricing_type": "free", "price": 0, "format": "both", "grade_levels": [8, 9, 10], "subjects": ["History"], "available_copies": 5, "total_copies": 5, "shelf_location": "C2-04"},
     ]
     
     leisure_books = [
-        {"title": "The Adventure Begins", "author": "J.K. Fantasy", "description": "An exciting adventure novel for teens", "category": "leisure", "pricing_type": "rent", "price": 2.99, "format": "physical", "grade_levels": [8, 9, 10, 11, 12], "subjects": ["Fiction"], "available_copies": 2, "total_copies": 2, "shelf_location": "L1-01"},
-        {"title": "Mystery at Midnight", "author": "Agatha Detective", "description": "A thrilling mystery novel", "category": "leisure", "pricing_type": "buy", "price": 12.99, "format": "both", "grade_levels": [10, 11, 12], "subjects": ["Fiction", "Mystery"], "available_copies": 3, "total_copies": 3, "shelf_location": "L2-04"},
-        {"title": "Graphic Novel Collection", "author": "Comic Masters", "description": "Popular graphic novels compilation", "category": "leisure", "pricing_type": "rent", "price": 3.99, "format": "digital", "grade_levels": [8, 9, 10, 11, 12], "subjects": ["Comics"], "file_url": "https://example.com/comics.pdf"},
-        {"title": "Cooking for Teens", "author": "Chef Junior", "description": "Easy recipes for young cooks", "category": "leisure", "pricing_type": "buy", "price": 9.99, "format": "physical", "grade_levels": [8, 9, 10, 11, 12], "subjects": ["Lifestyle", "Cooking"], "available_copies": 2, "total_copies": 2, "shelf_location": "L3-02"},
-        {"title": "Space Explorers", "author": "Neil Galaxy", "description": "Sci-fi adventure in outer space", "category": "leisure", "pricing_type": "rent", "price": 4.99, "format": "both", "grade_levels": [8, 9, 10], "subjects": ["Fiction", "Sci-Fi"], "available_copies": 4, "total_copies": 4, "shelf_location": "L1-05"},
+        {"title": "The Adventure Begins", "author": "J.K. Fantasy", "description": "An exciting adventure novel for teens", "content": BOOK_CONTENT_BLUEPRINTS["The Adventure Begins"], "category": "leisure", "pricing_type": "rent", "price": 2.99, "format": "physical", "grade_levels": [8, 9, 10, 11, 12], "subjects": ["Fiction"], "available_copies": 2, "total_copies": 2, "shelf_location": "L1-01"},
+        {"title": "Mystery at Midnight", "author": "Agatha Detective", "description": "A thrilling mystery novel", "content": BOOK_CONTENT_BLUEPRINTS["Mystery at Midnight"], "category": "leisure", "pricing_type": "buy", "price": 12.99, "format": "both", "grade_levels": [10, 11, 12], "subjects": ["Fiction", "Mystery"], "available_copies": 3, "total_copies": 3, "shelf_location": "L2-04"},
+        {"title": "Graphic Novel Collection", "author": "Comic Masters", "description": "Popular graphic novels compilation", "content": BOOK_CONTENT_BLUEPRINTS["Graphic Novel Collection"], "category": "leisure", "pricing_type": "rent", "price": 3.99, "format": "digital", "grade_levels": [8, 9, 10, 11, 12], "subjects": ["Comics"], "file_url": "https://example.com/comics.pdf"},
+        {"title": "Cooking for Teens", "author": "Chef Junior", "description": "Easy recipes for young cooks", "content": BOOK_CONTENT_BLUEPRINTS["Cooking for Teens"], "category": "leisure", "pricing_type": "buy", "price": 9.99, "format": "physical", "grade_levels": [8, 9, 10, 11, 12], "subjects": ["Lifestyle", "Cooking"], "available_copies": 2, "total_copies": 2, "shelf_location": "L3-02"},
+        {"title": "Space Explorers", "author": "Neil Galaxy", "description": "Sci-fi adventure in outer space", "content": BOOK_CONTENT_BLUEPRINTS["Space Explorers"], "category": "leisure", "pricing_type": "rent", "price": 4.99, "format": "both", "grade_levels": [8, 9, 10], "subjects": ["Fiction", "Sci-Fi"], "available_copies": 4, "total_copies": 4, "shelf_location": "L1-05"},
     ]
     
     book_ids = {}
@@ -1878,7 +1995,10 @@ async def seed_data():
         book_id = str(uuid.uuid4())
         book_ids[book["title"]] = book_id
         book["id"] = book_id
-        book["cover_image"] = None
+        if not book.get("cover_image"):
+            safe_query = re.sub(r"[^a-z0-9]+", "+", book["title"].lower()).strip("+")
+            category = book["category"] if book.get("category") in ["academic", "leisure"] else "books"
+            book["cover_image"] = f"https://source.unsplash.com/600x800/?{category},{safe_query},book"
         book["isbn"] = None
         book["external_link"] = None
         book["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -1901,7 +2021,6 @@ async def seed_data():
     module2_id = str(uuid.uuid4())
     module3_id = str(uuid.uuid4())
     quiz1_id = str(uuid.uuid4())
-    quiz2_id = str(uuid.uuid4())
     
     courses.append({
         "id": course1_id,
@@ -1915,37 +2034,21 @@ async def seed_data():
         "is_free": True,
         "price": 0,
         "modules": [
-            {"id": module1_id, "title": "Variables and Expressions", "description": "Understanding variables in algebra", "content": "A variable is a symbol that represents an unknown value. In algebra, we use letters like x, y, and z to represent these unknowns...", "video_url": None, "order": 1},
-            {"id": module2_id, "title": "Solving Linear Equations", "description": "Step by step equation solving", "content": "To solve a linear equation, we need to isolate the variable on one side of the equation...", "video_url": None, "order": 2},
-            {"id": module3_id, "title": "Word Problems", "description": "Applying algebra to real-world problems", "content": "Word problems require us to translate English sentences into mathematical equations...", "video_url": None, "order": 3}
+            {"id": module1_id, "title": "Variables and Expressions", "description": "Understanding variables in algebra", "content": "This lesson introduces algebraic notation, variables, constants, and expressions. Students learn how letters can represent unknown values, how to combine like terms, and how to translate verbal phrases into mathematical expressions.", "video_url": None, "order": 1},
+            {"id": module2_id, "title": "Solving Linear Equations", "description": "Step by step equation solving", "content": "This module covers one-step and two-step linear equations. Learners practice isolating the variable, using inverse operations, and checking solutions for accuracy with worked examples and short exercises.", "video_url": None, "order": 2},
+            {"id": module3_id, "title": "Word Problems", "description": "Applying algebra to real-world problems", "content": "Students apply algebra to everyday scenarios such as shopping budgets, distance-time questions, and age relationships. The focus is on identifying unknowns, creating equations, and explaining the reasoning behind each answer.", "video_url": None, "order": 3}
         ],
         "quizzes": [
             {
                 "id": quiz1_id,
-                "title": "Algebra Basics Quiz",
-                "module_id": module1_id,
+                "title": "Algebra Final Quiz",
+                "module_id": module3_id,
                 "questions": [
-                    {"question": "What is the value of x in: x + 5 = 12?", "options": ["5", "7", "12", "17"], "correct_answer": 1},
-                    {"question": "Simplify: 3x + 2x", "options": ["5x", "6x", "5x²", "x"], "correct_answer": 0},
-                    {"question": "What is 2(x + 3) expanded?", "options": ["2x + 3", "2x + 6", "x + 6", "2x + 5"], "correct_answer": 1},
-                    {"question": "Solve: 2x = 10", "options": ["x = 2", "x = 5", "x = 10", "x = 20"], "correct_answer": 1},
-                    {"question": "If y = 3x and x = 4, what is y?", "options": ["7", "12", "1", "4"], "correct_answer": 1}
+                    {"question": "Theory: Which statement best explains why inverse operations are used when solving linear equations?", "options": ["They make numbers larger", "They keep the equation balanced while isolating the variable", "They remove constants only on the right side", "They turn expressions into formulas"], "correct_answer": 1},
+                    {"question": "Practical: A student buys 3 notebooks and one pen for a total of $11. If the pen costs $2, which equation correctly finds the price x of one notebook?", "options": ["3x + 2 = 11", "3 + 2x = 11", "11x - 2 = 3", "x + 2 = 11"], "correct_answer": 0}
                 ],
-                "total_marks": 50,
-                "passing_marks": 25
-            },
-            {
-                "id": quiz2_id,
-                "title": "Linear Equations Quiz",
-                "module_id": module2_id,
-                "questions": [
-                    {"question": "Solve: x - 7 = 15", "options": ["x = 8", "x = 22", "x = -22", "x = 7"], "correct_answer": 1},
-                    {"question": "What is x in: 3x + 6 = 21?", "options": ["x = 5", "x = 9", "x = 15", "x = 3"], "correct_answer": 0},
-                    {"question": "Solve: x/4 = 8", "options": ["x = 2", "x = 12", "x = 32", "x = 4"], "correct_answer": 2},
-                    {"question": "If 5x - 3 = 12, what is x?", "options": ["x = 3", "x = 9", "x = 15", "x = 1.8"], "correct_answer": 0}
-                ],
-                "total_marks": 40,
-                "passing_marks": 20
+                "total_marks": 20,
+                "passing_marks": 12
             }
         ],
         "created_at": datetime.now(timezone.utc).isoformat()
@@ -1969,21 +2072,20 @@ async def seed_data():
         "is_free": True,
         "price": 0,
         "modules": [
-            {"id": bio_module1_id, "title": "Cell Structure", "description": "Understanding the building blocks of life", "content": "All living things are made of cells. Cells are the basic unit of life...", "video_url": None, "order": 1},
-            {"id": bio_module2_id, "title": "DNA and Genetics", "description": "How traits are inherited", "content": "DNA contains the genetic instructions for all living organisms...", "video_url": None, "order": 2}
+            {"id": bio_module1_id, "title": "Cell Structure", "description": "Understanding the building blocks of life", "content": "Students explore cell theory, the difference between plant and animal cells, and the role of organelles such as the nucleus, mitochondria, chloroplasts, and cell membrane in keeping organisms alive.", "video_url": None, "order": 1},
+            {"id": bio_module2_id, "title": "DNA and Genetics", "description": "How traits are inherited", "content": "This module introduces chromosomes, genes, and DNA. Learners study how traits are inherited, why variation happens, and how dominant and recessive traits can be modeled with simple genetics problems.", "video_url": None, "order": 2}
         ],
         "quizzes": [
             {
                 "id": bio_quiz_id,
-                "title": "Cell Biology Quiz",
-                "module_id": bio_module1_id,
+                "title": "Biology Final Quiz",
+                "module_id": bio_module2_id,
                 "questions": [
-                    {"question": "What is the powerhouse of the cell?", "options": ["Nucleus", "Mitochondria", "Ribosome", "Cell membrane"], "correct_answer": 1},
-                    {"question": "Which organelle contains DNA?", "options": ["Ribosome", "Golgi body", "Nucleus", "Lysosome"], "correct_answer": 2},
-                    {"question": "Plant cells have ____ that animal cells don't have", "options": ["Nucleus", "Cell wall", "Mitochondria", "Cytoplasm"], "correct_answer": 1}
+                    {"question": "Theory: Which organelle is mainly responsible for releasing usable energy during cellular respiration?", "options": ["Nucleus", "Mitochondrion", "Vacuole", "Cell wall"], "correct_answer": 1},
+                    {"question": "Practical: Two plants are crossed and both parents carry one dominant tall gene and one recessive short gene. Which outcome is possible for an offspring?", "options": ["Only tall offspring can appear", "Only short offspring can appear", "Both tall and short offspring can appear", "No offspring can inherit the tall trait"], "correct_answer": 2}
                 ],
-                "total_marks": 30,
-                "passing_marks": 15
+                "total_marks": 20,
+                "passing_marks": 12
             }
         ],
         "created_at": datetime.now(timezone.utc).isoformat()
@@ -1992,6 +2094,7 @@ async def seed_data():
     # Course 3 - English by Teacher 3
     course3_id = str(uuid.uuid4())
     eng_module1_id = str(uuid.uuid4())
+    eng_module2_id = str(uuid.uuid4())
     eng_quiz_id = str(uuid.uuid4())
     
     courses.append({
@@ -2006,19 +2109,20 @@ async def seed_data():
         "is_free": True,
         "price": 0,
         "modules": [
-            {"id": eng_module1_id, "title": "Shakespeare Introduction", "description": "Understanding the Bard", "content": "William Shakespeare wrote 37 plays and 154 sonnets...", "video_url": None, "order": 1}
+            {"id": eng_module1_id, "title": "Shakespeare Introduction", "description": "Understanding the Bard", "content": "Learners are introduced to Shakespeare's historical context, language style, and recurring themes such as love, ambition, conflict, and fate. The lesson also explains why Shakespeare remains influential today.", "video_url": None, "order": 1},
+            {"id": eng_module2_id, "title": "Reading and Interpretation", "description": "Finding meaning in literary texts", "content": "Students practice identifying theme, tone, imagery, and character motivation in short passages. They learn how to support an interpretation with direct textual evidence and clear reasoning.", "video_url": None, "order": 2}
         ],
         "quizzes": [
             {
                 "id": eng_quiz_id,
-                "title": "Shakespeare Quiz",
-                "module_id": eng_module1_id,
+                "title": "English Final Quiz",
+                "module_id": eng_module2_id,
                 "questions": [
-                    {"question": "Who wrote Romeo and Juliet?", "options": ["Charles Dickens", "Shakespeare", "Jane Austen", "Mark Twain"], "correct_answer": 1},
-                    {"question": "How many sonnets did Shakespeare write?", "options": ["100", "154", "200", "50"], "correct_answer": 1}
+                    {"question": "Theory: Which idea best describes a literary theme?", "options": ["The time period of the story", "The main message or insight explored in the text", "The number of characters in a chapter", "The author’s full biography"], "correct_answer": 1},
+                    {"question": "Practical: A character says they are 'fine' while clenching their fists and looking away. What is the best interpretation?", "options": ["The character is calm and relaxed", "The character is probably hiding frustration or anger", "The character is giving background information", "The character is speaking literally without emotion"], "correct_answer": 1}
                 ],
                 "total_marks": 20,
-                "passing_marks": 10
+                "passing_marks": 12
             }
         ],
         "created_at": datetime.now(timezone.utc).isoformat()
@@ -2039,7 +2143,7 @@ async def seed_data():
         # Liam Brown - Struggling student
         {"student_idx": 2, "course_id": course1_id, "progress": 33.33, "completed_modules": [module1_id], "status": "in_progress"},
         # Olivia Davis
-        {"student_idx": 3, "course_id": course3_id, "progress": 100, "completed_modules": [eng_module1_id], "status": "completed"},
+        {"student_idx": 3, "course_id": course3_id, "progress": 100, "completed_modules": [eng_module1_id, eng_module2_id], "status": "completed"},
         # Ethan Smith (WSS)
         {"student_idx": 6, "course_id": course1_id, "progress": 66.67, "completed_modules": [module1_id, module2_id], "status": "in_progress"},
         # Charlotte Harris (BCSS)
@@ -2066,23 +2170,19 @@ async def seed_data():
     
     # ==================== QUIZ RESULTS ====================
     quiz_results_data = [
-        # Tommy - Decent scores
-        {"student_idx": 0, "course_id": course1_id, "quiz_id": quiz1_id, "quiz_title": "Algebra Basics Quiz", "score": 35, "total": 50, "percentage": 70, "passed": True},
-        {"student_idx": 0, "course_id": course1_id, "quiz_id": quiz2_id, "quiz_title": "Linear Equations Quiz", "score": 28, "total": 40, "percentage": 70, "passed": True},
-        {"student_idx": 0, "course_id": course2_id, "quiz_id": bio_quiz_id, "quiz_title": "Cell Biology Quiz", "score": 24, "total": 30, "percentage": 80, "passed": True},
-        # Emma - Excellent scores
-        {"student_idx": 1, "course_id": course1_id, "quiz_id": quiz1_id, "quiz_title": "Algebra Basics Quiz", "score": 48, "total": 50, "percentage": 96, "passed": True},
-        {"student_idx": 1, "course_id": course1_id, "quiz_id": quiz2_id, "quiz_title": "Linear Equations Quiz", "score": 38, "total": 40, "percentage": 95, "passed": True},
-        {"student_idx": 1, "course_id": course2_id, "quiz_id": bio_quiz_id, "quiz_title": "Cell Biology Quiz", "score": 27, "total": 30, "percentage": 90, "passed": True},
-        # Liam - Struggling (below 50%)
-        {"student_idx": 2, "course_id": course1_id, "quiz_id": quiz1_id, "quiz_title": "Algebra Basics Quiz", "score": 20, "total": 50, "percentage": 40, "passed": False},
-        # Olivia - Good
-        {"student_idx": 3, "course_id": course3_id, "quiz_id": eng_quiz_id, "quiz_title": "Shakespeare Quiz", "score": 18, "total": 20, "percentage": 90, "passed": True},
-        # Ethan - Below 50%
-        {"student_idx": 6, "course_id": course1_id, "quiz_id": quiz1_id, "quiz_title": "Algebra Basics Quiz", "score": 22, "total": 50, "percentage": 44, "passed": False},
-        {"student_idx": 6, "course_id": course1_id, "quiz_id": quiz2_id, "quiz_title": "Linear Equations Quiz", "score": 18, "total": 40, "percentage": 45, "passed": False},
-        # Charlotte - Average
-        {"student_idx": 11, "course_id": course2_id, "quiz_id": bio_quiz_id, "quiz_title": "Cell Biology Quiz", "score": 18, "total": 30, "percentage": 60, "passed": True},
+        # Tommy - completed biology final
+        {"student_idx": 0, "course_id": course2_id, "quiz_id": bio_quiz_id, "quiz_title": "Biology Final Quiz", "score": 16, "total": 20, "percentage": 80, "passed": True},
+        # Emma - excellent scores
+        {"student_idx": 1, "course_id": course1_id, "quiz_id": quiz1_id, "quiz_title": "Algebra Final Quiz", "score": 20, "total": 20, "percentage": 100, "passed": True},
+        {"student_idx": 1, "course_id": course2_id, "quiz_id": bio_quiz_id, "quiz_title": "Biology Final Quiz", "score": 18, "total": 20, "percentage": 90, "passed": True},
+        # Liam - struggling (below 60%)
+        {"student_idx": 2, "course_id": course1_id, "quiz_id": quiz1_id, "quiz_title": "Algebra Final Quiz", "score": 8, "total": 20, "percentage": 40, "passed": False},
+        # Olivia - good
+        {"student_idx": 3, "course_id": course3_id, "quiz_id": eng_quiz_id, "quiz_title": "English Final Quiz", "score": 18, "total": 20, "percentage": 90, "passed": True},
+        # Ethan - below 60%
+        {"student_idx": 6, "course_id": course1_id, "quiz_id": quiz1_id, "quiz_title": "Algebra Final Quiz", "score": 9, "total": 20, "percentage": 45, "passed": False},
+        # Charlotte - minimum passing score
+        {"student_idx": 11, "course_id": course2_id, "quiz_id": bio_quiz_id, "quiz_title": "Biology Final Quiz", "score": 12, "total": 20, "percentage": 60, "passed": True},
     ]
     
     for qr in quiz_results_data:
@@ -2098,7 +2198,7 @@ async def seed_data():
             "total_marks": qr["total"],
             "percentage": qr["percentage"],
             "passed": qr["passed"],
-            "answers": [random.randint(0, 3) for _ in range(5)],
+            "answers": [random.randint(0, 3) for _ in range(2)],
             "submitted_at": (datetime.now(timezone.utc) - timedelta(days=random.randint(1, 14))).isoformat()
         }
         await db.quiz_results.insert_one(result)
@@ -2187,6 +2287,739 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def stable_demo_id(*parts: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "::".join(parts)))
+
+
+BOOK_CONTENT_BLUEPRINTS = {
+    "Algebra Fundamentals": """Chapter 1: Algebraic Thinking
+
+Algebra helps us describe patterns and solve unknowns using symbols. A variable stands for a value that can change, while a constant stays the same. Expressions combine numbers, variables, and operations.
+
+Chapter 2: Expressions and Simplification
+
+Like terms can be combined because they represent the same kind of quantity. For example, 3x + 2x becomes 5x. Students should identify coefficients, constants, and operations before simplifying.
+
+Chapter 3: Solving Equations
+
+An equation states that two expressions are equal. To solve an equation, isolate the variable using inverse operations and keep both sides balanced. Always check the solution by substituting it back into the original equation.
+
+Chapter 4: Word Problems
+
+Word problems require translating a real situation into mathematical language. Define the unknown, write an equation, solve carefully, and explain what the answer means in context.
+""",
+    "World History: Modern Era": """Unit 1: Revolutions and Change
+
+The modern era includes major political and social revolutions that reshaped societies. Students study how ideas such as liberty, equality, nationalism, and reform influenced people and governments.
+
+Unit 2: Industrialization
+
+Industrialization changed how goods were produced and how people lived. Factories increased output, cities grew quickly, and new technologies improved transport and communication, but working conditions were often difficult.
+
+Unit 3: Global Conflict
+
+World conflicts in the modern era were shaped by alliances, nationalism, imperialism, and economic competition. Students should trace causes, major events, and long-term consequences rather than memorizing isolated facts.
+
+Unit 4: Contemporary World
+
+Modern history also includes decolonization, human rights movements, and globalization. Learners should compare how societies adapted to political change, technological growth, and international cooperation.
+""",
+    "Biology: Life Sciences": """Section 1: Cells and Organisms
+
+Cells are the basic unit of life. Plant and animal cells share structures such as the nucleus, cytoplasm, and cell membrane, while plant cells also contain chloroplasts and a cell wall.
+
+Section 2: Body Systems and Survival
+
+Living things survive because systems work together. Cells form tissues, tissues form organs, and organs form systems that transport materials, protect the body, and maintain balance.
+
+Section 3: Genetics and Inheritance
+
+DNA carries genetic information. Genes influence inherited traits, and variation occurs because offspring receive different combinations of genetic material from their parents.
+
+Section 4: Ecosystems
+
+Organisms depend on both living and nonliving parts of their environment. Food chains, habitats, and adaptations help explain how life survives and changes within ecosystems.
+""",
+    "English Literature Anthology": """Part 1: Reading Literature Closely
+
+Literature invites readers to explore ideas, emotions, and perspectives. Strong readers pay attention to character, setting, conflict, theme, and the language choices an author makes.
+
+Part 2: Poetry and Imagery
+
+Poets use imagery, rhythm, symbolism, and figurative language to create meaning. Readers should notice how a poem sounds as well as what it says directly.
+
+Part 3: Drama and Dialogue
+
+In drama, character relationships and themes are often revealed through dialogue and stage action. Students should infer meaning from tone, pauses, and what characters avoid saying.
+
+Part 4: Interpretation and Evidence
+
+A good interpretation is supported by evidence from the text. Readers should quote or paraphrase details and explain how those details support a larger idea about the work.
+""",
+    "Physics for Beginners": """Lesson 1: Motion
+
+Motion describes how an object changes position over time. Speed is calculated using distance divided by time, and direction matters when describing movement more precisely.
+
+Lesson 2: Forces
+
+A force is a push or pull. Balanced forces do not change an object's motion, while unbalanced forces can make an object start moving, stop, speed up, slow down, or change direction.
+
+Lesson 3: Energy
+
+Energy allows things to happen. Common forms include thermal, light, sound, electrical, and kinetic energy. Energy can transfer from one object to another and can also change form.
+
+Lesson 4: Simple Machines
+
+Simple machines such as levers, pulleys, wheels, and inclined planes make work easier by changing the size or direction of a force.
+""",
+    "Chemistry Essentials": """Topic 1: Matter and Particles
+
+Matter is anything that has mass and takes up space. All matter is made of tiny particles, and understanding their arrangement helps explain solids, liquids, and gases.
+
+Topic 2: Atoms and Elements
+
+Atoms are the building blocks of matter. Each element has a unique number of protons, and the periodic table organizes elements by shared properties and patterns.
+
+Topic 3: Compounds and Mixtures
+
+Elements can combine chemically to form compounds, while mixtures are physical combinations of substances. Students should distinguish between a chemical bond and a simple physical blend.
+
+Topic 4: Chemical Change
+
+Chemical reactions produce new substances. Signs of a reaction may include colour change, heat, gas, or precipitate formation, but evidence should always be interpreted carefully.
+""",
+    "Calculus Made Easy": """Module 1: Rates of Change
+
+Calculus begins with the idea of change. A rate of change compares how one quantity changes relative to another, and the slope of a graph is an important starting point.
+
+Module 2: Limits
+
+Limits describe what a function approaches as the input moves toward a value. They help explain continuity and prepare students for formal definitions of derivatives.
+
+Module 3: Derivatives
+
+The derivative measures instantaneous rate of change. Students connect derivatives to tangent slope, motion problems, and optimization questions.
+
+Module 4: Applications
+
+Calculus is used to model growth, motion, and optimization. Learners should focus on interpreting what an answer means, not only performing symbolic procedures.
+""",
+    "Canadian History": """Chapter 1: Confederation and Nation Building
+
+Canadian history includes the growth of provinces, national institutions, and transportation systems that connected regions. Confederation shaped political identity and responsibility.
+
+Chapter 2: Immigration and Society
+
+Canada changed as different communities arrived and contributed to the country. Students should consider both opportunity and inequality when examining settlement and social development.
+
+Chapter 3: Conflict and Change
+
+Wars, political movements, and debates over rights influenced Canada's development. Historical thinking requires examining both causes and the different perspectives involved.
+
+Chapter 4: Canada Today
+
+Modern Canada is shaped by bilingualism, multiculturalism, Indigenous rights, and global relationships. Students should connect present issues to historical roots.
+""",
+    "The Adventure Begins": """Chapter 1: The Map
+
+Mira discovers an old map hidden inside a library book. The markings seem strange at first, but one symbol points toward a path outside her quiet town and begins the adventure.
+
+Chapter 2: Into the Forest
+
+Mira and her friend Dev follow the map into a forest filled with misleading trails and abandoned stone markers. They learn to trust observation, courage, and teamwork.
+
+Chapter 3: The Hidden Door
+
+The travellers find a sealed doorway built into a cliffside. Solving the clue requires patience and memory, proving that intelligence matters as much as bravery.
+
+Chapter 4: A New Beginning
+
+Beyond the door is not treasure but knowledge about the town's forgotten history. The ending shows that adventure can change how people understand themselves and their world.
+""",
+    "Mystery at Midnight": """Case File 1: The Missing Letter
+
+The mystery begins when an important letter vanishes before a public announcement. Every suspect has a motive, but the timing of events becomes the key puzzle.
+
+Case File 2: Clues and Contradictions
+
+Detective Leena notices that witness statements do not match. Careful readers should track inconsistencies, hidden motives, and details that seem unimportant at first.
+
+Case File 3: The Trap
+
+The detective sets a plan to test the suspects rather than accuse anyone too early. This section highlights deduction, observation, and the importance of evidence.
+
+Case File 4: The Reveal
+
+The culprit is exposed through a combination of timing, physical evidence, and human behavior. The story shows that strong conclusions come from patterns, not guesses.
+""",
+    "Graphic Novel Collection": """Volume 1: Visual Storytelling
+
+Graphic novels combine words and images to build meaning. Panel size, colour, perspective, and facial expression all contribute to tone and pacing.
+
+Volume 2: Character Arcs
+
+Characters in graphic stories often change through conflict, friendship, and responsibility. Readers should pay attention to both dialogue and visual cues.
+
+Volume 3: Action and Sequence
+
+Action scenes depend on sequence. A reader must infer movement across panels and connect what happens between images to understand the full event.
+
+Volume 4: Theme in Comics
+
+Comics can explore serious ideas such as identity, justice, belonging, and resilience. Visual storytelling can communicate emotion and symbolism as effectively as prose.
+""",
+    "Cooking for Teens": """Lesson 1: Kitchen Safety
+
+Safe cooking begins with washing hands, cleaning surfaces, reading recipes fully, and handling knives and hot equipment carefully. Good habits prevent accidents and contamination.
+
+Lesson 2: Basic Techniques
+
+Young cooks should learn how to measure ingredients, chop safely, saute simple foods, and follow cooking times. Confidence grows through repetition and preparation.
+
+Lesson 3: Balanced Meals
+
+A strong meal includes different food groups and sensible portions. Students should think about nutrition, flavour, texture, and timing when planning what to cook.
+
+Lesson 4: Easy Recipes
+
+Simple recipes such as pasta dishes, wraps, omelets, smoothies, and baked snacks help beginners practice skills while producing useful everyday meals.
+""",
+    "Space Explorers": """Mission Log 1: Launch
+
+The crew of the Horizon begins a mission beyond the solar system. Training, preparation, and trust are essential because the journey depends on both science and teamwork.
+
+Mission Log 2: Unknown Signals
+
+An unexplained signal interrupts the mission. The crew must decide whether to investigate, showing how curiosity and risk shape exploration.
+
+Mission Log 3: The Silent Planet
+
+The explorers land on a world that appears lifeless at first glance. As clues emerge, the story builds suspense around what counts as life and intelligence.
+
+Mission Log 4: Homeward Truths
+
+The return journey changes the crew's understanding of discovery. The story emphasizes resilience, ethics, and the idea that exploration also reveals truths about humanity.
+""",
+}
+
+
+BOOK_OVERVIEW_BLUEPRINTS = {
+    "Algebra Fundamentals": "A structured introduction to the language of algebra, this book walks students from variables and expressions into equation solving and word-problem reasoning. It is designed to build confidence with the core patterns that appear in middle- and high-school mathematics, with an emphasis on clear steps, balance, and explanation.",
+    "World History: Modern Era": "This history text introduces the major political, economic, and social transformations of the modern world. It gives students a broad understanding of revolutions, industrialization, conflict, and globalization while encouraging them to connect events across time rather than memorizing isolated dates.",
+    "Biology: Life Sciences": "This book provides a foundational overview of life science, starting with cells and basic biological organization before moving into genetics, systems, and ecosystems. It is written as an entry point for students who need a clear, readable guide to the core ideas of biology.",
+    "English Literature Anthology": "An introductory literature collection focused on reading strategies, theme, tone, and interpretation, this book helps students approach poetry, drama, and prose with confidence. It emphasizes how readers move from observation to evidence-based interpretation.",
+    "Physics for Beginners": "This starter physics text introduces motion, forces, energy, and simple machines through straightforward explanations and real-world examples. Its goal is to help students connect formulas and concepts to everyday experiences such as movement, friction, and mechanical advantage.",
+    "Chemistry Essentials": "A beginner-friendly chemistry book covering matter, atoms, compounds, mixtures, and chemical reactions. It is meant to help students understand how substances are structured, how they combine, and how evidence is used to identify physical and chemical change.",
+    "Calculus Made Easy": "This overview of introductory calculus explains rates of change, limits, and derivatives in a way that connects symbolic math to practical meaning. It gives learners a bridge from algebraic thinking into more advanced problem solving involving motion, optimization, and graphical interpretation.",
+    "Canadian History": "A survey-style history book that introduces major developments in Canada from political formation to social change and national identity. The overview encourages students to think historically by connecting institutions, migration, conflict, and rights across different periods.",
+    "The Adventure Begins": "A young-adult adventure story about discovery, courage, and hidden history, this book follows a journey that starts with a mysterious map and grows into a search for meaning. Its overview highlights the role of friendship, observation, and personal growth in the narrative.",
+    "Mystery at Midnight": "A classic-style mystery built around missing evidence, conflicting testimony, and careful deduction. The overview frames the story as a puzzle in which readers follow clues, motives, and contradictions alongside the detective.",
+    "Graphic Novel Collection": "A visual storytelling collection that introduces readers to how comics use panels, pacing, expression, and sequence to communicate meaning. It is as much about reading images critically as it is about following storylines and character development.",
+    "Cooking for Teens": "A practical beginner cookbook aimed at helping young readers build safe, confident kitchen habits. The overview focuses on kitchen safety, simple techniques, balanced meals, and accessible everyday recipes that support independence.",
+    "Space Explorers": "A science-fiction adventure centered on exploration, uncertainty, and the emotional weight of discovery. The overview presents the book as both a futuristic mission story and a reflection on teamwork, ethics, and curiosity beyond Earth.",
+}
+
+
+BOOK_SOURCE_BLUEPRINTS = {
+    "Algebra Fundamentals": "https://openstax.org/books/algebra-and-trigonometry-2e/pages/preface",
+    "World History: Modern Era": "https://openstax.org/details/books/world-history-volume-2",
+    "Biology: Life Sciences": "https://openstax.org/details/books/biology-2e",
+    "English Literature Anthology": "https://www.gutenberg.org/ebooks/100",
+    "Physics for Beginners": "https://openstax.org/details/books/college-physics-2e",
+    "Chemistry Essentials": "https://openstax.org/details/books/chemistry-2e",
+    "Calculus Made Easy": "https://openstax.org/books/calculus-volume-1/pages/preface",
+    "Canadian History": "https://opentextbc.ca/preconfederation2e/front-matter/about-the-book/",
+    "The Adventure Begins": "https://www.gutenberg.org/ebooks/120",
+    "Mystery at Midnight": "https://dev.gutenberg.org/ebooks/28733",
+    "Graphic Novel Collection": "https://www.loc.gov/collections/comic-books-and-graphic-novels/about-this-collection/",
+    "Cooking for Teens": "https://en.wikibooks.org/wiki/Cookbook",
+    "Space Explorers": "https://dev.gutenberg.org/files/8986/old/moon3-index.htm",
+}
+
+
+def normalize_book_content(book: dict) -> dict:
+    normalized = dict(book)
+    default_overview = BOOK_OVERVIEW_BLUEPRINTS.get(normalized.get("title"))
+    default_content = BOOK_CONTENT_BLUEPRINTS.get(normalized.get("title"))
+    default_source = BOOK_SOURCE_BLUEPRINTS.get(normalized.get("title"))
+    if default_overview and not normalized.get("overview"):
+        normalized["overview"] = default_overview
+    if default_content and not normalized.get("content"):
+        normalized["content"] = default_content
+    if default_source and not normalized.get("external_link"):
+        normalized["external_link"] = default_source
+    if normalized.get("file_url") and "example.com" in normalized.get("file_url", ""):
+        normalized["file_url"] = None
+    return normalized
+
+
+DEMO_COURSE_BLUEPRINTS = {
+    "Introduction to Algebra": {
+        "teacher_email": "m.johnson@nths.edu",
+        "teacher_name": "Mr. Michael Johnson",
+        "description": "Learn the basics of algebraic equations and problem solving",
+        "grade_levels": [8, 9],
+        "subjects": ["Mathematics"],
+        "modules": [
+            {
+                "title": "Variables and Expressions",
+                "description": "Understanding variables in algebra",
+                "content": "Lesson notes: Variables represent unknown values, while constants stay fixed. Expressions combine variables, numbers, and operations such as addition or multiplication. Students should be able to translate phrases like 'five more than x' into x + 5, combine like terms such as 3x + 2x = 5x, and explain why unlike terms cannot be combined directly."
+            },
+            {
+                "title": "Solving Linear Equations",
+                "description": "Step by step equation solving",
+                "content": "Lesson notes: A linear equation can be solved by isolating the variable using inverse operations. If 3x + 6 = 21, subtract 6 from both sides to keep the equation balanced, then divide by 3 to find x = 5. Students should check solutions by substituting the answer back into the original equation."
+            },
+            {
+                "title": "Word Problems",
+                "description": "Applying algebra to real-world problems",
+                "content": "Lesson notes: Word problems require identifying the unknown, defining a variable, and building an equation from the information given. For example, if 3 notebooks and 1 pen cost $11 and the pen costs $2, then the notebook cost x satisfies 3x + 2 = 11. Students should justify each step and connect the algebra to the real situation."
+            }
+        ],
+        "quiz": {
+            "title": "Algebra Final Quiz",
+            "questions": [
+                {
+                    "question": "Theory: Why are inverse operations used when solving a linear equation?",
+                    "options": [
+                        "They make the equation longer",
+                        "They keep the equation balanced while isolating the variable",
+                        "They change a variable into a constant",
+                        "They remove the need to check the answer"
+                    ],
+                    "correct_answer": 1
+                },
+                {
+                    "question": "Practical: A pen costs $2 and 3 notebooks together with the pen cost $11. Which equation models the notebook price x?",
+                    "options": ["3x + 2 = 11", "3 + 2x = 11", "11 - x = 2", "x + 2 = 11"],
+                    "correct_answer": 0
+                }
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Introduction to Biology": {
+        "teacher_email": "s.williams@nths.edu",
+        "teacher_name": "Ms. Sarah Williams",
+        "description": "Explore the fundamentals of life sciences",
+        "grade_levels": [9, 10],
+        "subjects": ["Biology", "Science"],
+        "modules": [
+            {
+                "title": "Cell Structure",
+                "description": "Understanding the building blocks of life",
+                "content": "Lesson notes: Cells are the basic unit of life. The nucleus stores genetic information, the cell membrane controls what enters and leaves the cell, and mitochondria release usable energy during cellular respiration. Plant cells also contain a cell wall and chloroplasts, which animal cells do not have."
+            },
+            {
+                "title": "DNA and Genetics",
+                "description": "How traits are inherited",
+                "content": "Lesson notes: DNA carries genetic instructions in genes found on chromosomes. Traits can be inherited in dominant or recessive forms. When two parents each carry one dominant and one recessive allele, their offspring may show either trait depending on the allele combination inherited."
+            }
+        ],
+        "quiz": {
+            "title": "Biology Final Quiz",
+            "questions": [
+                {
+                    "question": "Theory: According to the lesson, which organelle releases usable energy for the cell?",
+                    "options": ["Nucleus", "Mitochondrion", "Vacuole", "Cell wall"],
+                    "correct_answer": 1
+                },
+                {
+                    "question": "Practical: If two plants each carry one dominant tall allele and one recessive short allele, what result is possible for their offspring?",
+                    "options": [
+                        "Only tall offspring can appear",
+                        "Only short offspring can appear",
+                        "Both tall and short offspring can appear",
+                        "No inherited trait can be predicted"
+                    ],
+                    "correct_answer": 2
+                }
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "English Literature Essentials": {
+        "teacher_email": "r.patel@westview.edu",
+        "teacher_name": "Mr. Raj Patel",
+        "description": "Explore classic and contemporary literature",
+        "grade_levels": [10, 11, 12],
+        "subjects": ["English"],
+        "modules": [
+            {
+                "title": "Shakespeare Introduction",
+                "description": "Understanding the Bard",
+                "content": "Lesson notes: Shakespeare remains important because his works explore timeless themes such as love, ambition, jealousy, and fate. His writing often uses rich imagery, dramatic conflict, and memorable language to reveal character motivation and larger ideas."
+            },
+            {
+                "title": "Reading and Interpretation",
+                "description": "Finding meaning in literary texts",
+                "content": "Lesson notes: A theme is the central message or insight explored in a text. Readers interpret meaning by examining tone, imagery, dialogue, and character behavior. When a character's words and actions do not match, the reader should infer the deeper emotion or intention behind the scene."
+            }
+        ],
+        "quiz": {
+            "title": "English Final Quiz",
+            "questions": [
+                {
+                    "question": "Theory: What is a literary theme?",
+                    "options": [
+                        "The time period of the story",
+                        "The main message or insight explored in the text",
+                        "A list of all characters",
+                        "The author’s publishing history"
+                    ],
+                    "correct_answer": 1
+                },
+                {
+                    "question": "Practical: If a character says 'I’m fine' while clenching their fists and avoiding eye contact, what is the best interpretation?",
+                    "options": [
+                        "The character is relaxed",
+                        "The character is probably hiding anger or frustration",
+                        "The character is giving a factual report",
+                        "The character is ending the scene happily"
+                    ],
+                    "correct_answer": 1
+                }
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Geometry Foundations": {
+        "teacher_email": "m.johnson@nths.edu",
+        "teacher_name": "Mr. Michael Johnson",
+        "description": "Build confidence with angles, triangles, and geometric reasoning",
+        "grade_levels": [8, 9],
+        "subjects": ["Mathematics", "Geometry"],
+        "modules": [
+            {"title": "Angles and Lines", "description": "Understanding basic angle relationships", "content": "Lesson notes: Complementary angles add to 90 degrees and supplementary angles add to 180 degrees. Vertical angles are equal, and straight lines create predictable angle sums. Students should use these ideas to solve missing-angle problems."},
+            {"title": "Triangles and Properties", "description": "Classifying triangles and using angle sums", "content": "Lesson notes: Triangles can be classified by sides and by angles. The sum of interior angles in any triangle is 180 degrees. Students should apply this rule to calculate unknown angles and justify the type of triangle shown."}
+        ],
+        "quiz": {
+            "title": "Geometry Final Quiz",
+            "questions": [
+                {"question": "Theory: What is the sum of the interior angles in a triangle?", "options": ["90 degrees", "180 degrees", "270 degrees", "360 degrees"], "correct_answer": 1},
+                {"question": "Practical: Two angles in a triangle are 50 degrees and 60 degrees. What is the third angle?", "options": ["70 degrees", "80 degrees", "90 degrees", "100 degrees"], "correct_answer": 0}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Fractions and Ratios": {
+        "teacher_email": "m.johnson@nths.edu",
+        "teacher_name": "Mr. Michael Johnson",
+        "description": "Strengthen number sense with fractions, ratios, and proportional thinking",
+        "grade_levels": [7, 8],
+        "subjects": ["Mathematics"],
+        "modules": [
+            {"title": "Equivalent Fractions", "description": "Comparing and simplifying fractions", "content": "Lesson notes: Equivalent fractions represent the same value even when the numerator and denominator look different. Students should simplify fractions by dividing by common factors and compare fractions using visual or numerical reasoning."},
+            {"title": "Ratios and Proportions", "description": "Using ratios to compare quantities", "content": "Lesson notes: A ratio compares two quantities, while a proportion shows two ratios are equal. Students should solve scale problems, part-to-part comparisons, and simple real-world ratio situations such as recipes and maps."}
+        ],
+        "quiz": {
+            "title": "Fractions and Ratios Final Quiz",
+            "questions": [
+                {"question": "Theory: Which fraction is equivalent to 2/3?", "options": ["3/5", "4/6", "5/8", "6/12"], "correct_answer": 1},
+                {"question": "Practical: A drink recipe uses 2 cups of juice for every 3 cups of water. How much water is needed for 4 cups of juice?", "options": ["5 cups", "6 cups", "7 cups", "8 cups"], "correct_answer": 1}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Chemistry Essentials": {
+        "teacher_email": "s.williams@nths.edu",
+        "teacher_name": "Ms. Sarah Williams",
+        "description": "Discover atoms, elements, and chemical change",
+        "grade_levels": [10, 11],
+        "subjects": ["Chemistry", "Science"],
+        "modules": [
+            {"title": "Atoms and Elements", "description": "Understanding atomic structure", "content": "Lesson notes: Atoms are made of protons, neutrons, and electrons. The number of protons identifies the element. Students should connect atomic structure to element identity and recognize that electrons are involved in chemical behavior."},
+            {"title": "Chemical Reactions", "description": "Recognizing evidence of chemical change", "content": "Lesson notes: Chemical reactions create new substances. Signs of chemical change can include color change, gas production, temperature change, or precipitate formation. Students should distinguish between physical and chemical changes using evidence."}
+        ],
+        "quiz": {
+            "title": "Chemistry Final Quiz",
+            "questions": [
+                {"question": "Theory: Which particle determines what element an atom is?", "options": ["Electron", "Neutron", "Proton", "Ion"], "correct_answer": 2},
+                {"question": "Practical: A lab mixture bubbles and releases heat when two substances are combined. What does this most strongly suggest?", "options": ["Only a physical change happened", "A chemical reaction likely occurred", "The substances disappeared", "The mixture became an element"], "correct_answer": 1}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Physics Motion Basics": {
+        "teacher_email": "s.williams@nths.edu",
+        "teacher_name": "Ms. Sarah Williams",
+        "description": "Understand speed, distance, time, and forces",
+        "grade_levels": [9, 10],
+        "subjects": ["Physics", "Science"],
+        "modules": [
+            {"title": "Distance, Time, and Speed", "description": "Describing motion with formulas", "content": "Lesson notes: Speed tells how fast an object moves and can be calculated using speed = distance / time. Students should read simple motion situations, substitute values into the formula, and compare different moving objects."},
+            {"title": "Forces and Motion", "description": "How pushes and pulls affect objects", "content": "Lesson notes: A force is a push or pull that can change motion. Balanced forces do not change motion, while unbalanced forces do. Students should connect these ideas to friction, acceleration, and everyday examples such as cycling or braking."}
+        ],
+        "quiz": {
+            "title": "Physics Final Quiz",
+            "questions": [
+                {"question": "Theory: Which formula is used to calculate speed?", "options": ["speed = time / distance", "speed = distance / time", "speed = distance x time", "speed = force / mass"], "correct_answer": 1},
+                {"question": "Practical: A runner covers 100 meters in 20 seconds. What is the runner's speed?", "options": ["2 m/s", "4 m/s", "5 m/s", "10 m/s"], "correct_answer": 2}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "World History Foundations": {
+        "teacher_email": "r.patel@westview.edu",
+        "teacher_name": "Mr. Raj Patel",
+        "description": "Explore key events and changes in world civilizations",
+        "grade_levels": [9, 10],
+        "subjects": ["History", "Social Studies"],
+        "modules": [
+            {"title": "Civilizations and Society", "description": "What makes a civilization develop", "content": "Lesson notes: Civilizations often develop near water sources and grow through agriculture, trade, government, and written language. Students should understand how geography and organization help societies expand and become more complex."},
+            {"title": "Change Over Time", "description": "Studying causes and effects in history", "content": "Lesson notes: Historians study both causes and consequences. Events are connected, and long-term change can result from political decisions, technology, conflict, or economic shifts. Students should identify cause-and-effect links in historical examples."}
+        ],
+        "quiz": {
+            "title": "World History Final Quiz",
+            "questions": [
+                {"question": "Theory: Which factor most often helped early civilizations grow?", "options": ["Living far from rivers", "Access to reliable water", "Avoiding trade", "Having no government"], "correct_answer": 1},
+                {"question": "Practical: If a new trade route increases wealth and cultural exchange between regions, what is the best historical conclusion?", "options": ["Trade had no effect on society", "Trade can drive social and economic change", "Trade always causes war only", "Trade removes the need for government"], "correct_answer": 1}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Canadian Civics": {
+        "teacher_email": "r.patel@westview.edu",
+        "teacher_name": "Mr. Raj Patel",
+        "description": "Learn how government, citizenship, and participation work in Canada",
+        "grade_levels": [9, 10],
+        "subjects": ["Civics", "Social Studies"],
+        "modules": [
+            {"title": "Government and Responsibilities", "description": "Levels of government in Canada", "content": "Lesson notes: Canada has federal, provincial, and municipal levels of government. Each level handles different responsibilities such as defense, education, or local transit. Students should match public issues to the correct level of government."},
+            {"title": "Citizenship and Participation", "description": "How citizens take part in democracy", "content": "Lesson notes: Citizenship includes rights and responsibilities. People can participate by voting, staying informed, joining discussions, or supporting community action. Students should understand that democratic participation goes beyond election day."}
+        ],
+        "quiz": {
+            "title": "Canadian Civics Final Quiz",
+            "questions": [
+                {"question": "Theory: Which level of government is mainly responsible for education in Canada?", "options": ["Federal", "Provincial", "Municipal", "International"], "correct_answer": 1},
+                {"question": "Practical: If students want safer crosswalks near their school, which level of government would usually be the best first contact?", "options": ["Municipal", "Federal", "Provincial only", "No government level"], "correct_answer": 0}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Reading Comprehension Lab": {
+        "teacher_email": "r.patel@westview.edu",
+        "teacher_name": "Mr. Raj Patel",
+        "description": "Practice identifying main ideas, inference, and supporting details",
+        "grade_levels": [8, 9, 10],
+        "subjects": ["English", "Reading"],
+        "modules": [
+            {"title": "Main Idea and Details", "description": "Finding what a passage is mostly about", "content": "Lesson notes: The main idea is the central point of a passage, while supporting details explain or prove it. Students should separate examples from the author's key message and summarize short texts clearly."},
+            {"title": "Inference and Evidence", "description": "Reading between the lines", "content": "Lesson notes: Inference means combining clues from the text with background knowledge. Strong readers point to evidence in the passage before making a conclusion. Students should justify interpretations with specific details."}
+        ],
+        "quiz": {
+            "title": "Reading Comprehension Final Quiz",
+            "questions": [
+                {"question": "Theory: What is the best definition of a main idea?", "options": ["A random detail", "The central point of a passage", "The title only", "A character name"], "correct_answer": 1},
+                {"question": "Practical: If a passage says the streets were wet, umbrellas were open, and thunder was heard, what is the strongest inference?", "options": ["It was snowing", "It was raining", "It was midnight", "It was summer vacation"], "correct_answer": 1}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Essay Writing Workshop": {
+        "teacher_email": "r.patel@westview.edu",
+        "teacher_name": "Mr. Raj Patel",
+        "description": "Learn how to plan, draft, and support a strong essay",
+        "grade_levels": [10, 11, 12],
+        "subjects": ["English", "Writing"],
+        "modules": [
+            {"title": "Thesis and Structure", "description": "Building a focused essay", "content": "Lesson notes: A thesis statement presents the main argument of an essay. Strong essays use an introduction, body paragraphs with evidence, and a conclusion. Students should connect each paragraph back to the thesis."},
+            {"title": "Evidence and Explanation", "description": "Supporting ideas with clear reasoning", "content": "Lesson notes: Evidence can include quotations, examples, or facts, but it must be explained. Students should not simply insert evidence; they should show how it supports the main point and strengthens the argument."}
+        ],
+        "quiz": {
+            "title": "Essay Writing Final Quiz",
+            "questions": [
+                {"question": "Theory: What is the role of a thesis statement?", "options": ["To list page numbers", "To present the essay’s main argument", "To repeat the title", "To replace evidence"], "correct_answer": 1},
+                {"question": "Practical: If a paragraph includes a quotation but no explanation, what is missing?", "options": ["A new title", "Evidence", "Analysis of how the quotation supports the point", "A different font"], "correct_answer": 2}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Environmental Science": {
+        "teacher_email": "s.williams@nths.edu",
+        "teacher_name": "Ms. Sarah Williams",
+        "description": "Study ecosystems, sustainability, and human environmental impact",
+        "grade_levels": [9, 10, 11],
+        "subjects": ["Science", "Environment"],
+        "modules": [
+            {"title": "Ecosystems and Balance", "description": "How living things interact", "content": "Lesson notes: Ecosystems include organisms and their physical environment. Food chains, habitats, and resource availability affect survival. Students should understand that changes to one part of an ecosystem can influence the whole system."},
+            {"title": "Sustainability in Action", "description": "Reducing environmental impact", "content": "Lesson notes: Sustainability means meeting present needs without harming the future. Students should connect recycling, energy efficiency, conservation, and responsible consumption to long-term environmental health."}
+        ],
+        "quiz": {
+            "title": "Environmental Science Final Quiz",
+            "questions": [
+                {"question": "Theory: What is an ecosystem?", "options": ["Only plants in a forest", "Only animals in one region", "Living things and their environment interacting together", "A weather report"], "correct_answer": 2},
+                {"question": "Practical: Which action best supports sustainability in a school?", "options": ["Leaving lights on overnight", "Wasting paper daily", "Reducing energy use and recycling materials", "Burning more fuel for convenience"], "correct_answer": 2}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Computer Science Basics": {
+        "teacher_email": "teacher@school.com",
+        "teacher_name": "Demo Teacher",
+        "description": "Explore algorithms, coding logic, and digital problem solving",
+        "grade_levels": [9, 10, 11],
+        "subjects": ["Computer Science", "Technology"],
+        "modules": [
+            {"title": "Algorithms and Logic", "description": "Breaking problems into steps", "content": "Lesson notes: An algorithm is a sequence of steps used to solve a problem. Good algorithms are clear, ordered, and efficient. Students should be able to describe everyday tasks, such as making a sandwich, as an ordered algorithm."},
+            {"title": "Variables and Decisions", "description": "Using data and conditions in programs", "content": "Lesson notes: Programs store information in variables and use conditions to make decisions. If a condition is true, one action happens; if false, another may happen. Students should connect this to real examples like password checks or menu choices."}
+        ],
+        "quiz": {
+            "title": "Computer Science Final Quiz",
+            "questions": [
+                {"question": "Theory: What is an algorithm?", "options": ["A computer brand", "A random guess", "A sequence of steps to solve a problem", "A type of keyboard"], "correct_answer": 2},
+                {"question": "Practical: A program checks if a score is at least 60 before printing 'Pass'. What programming idea is this using?", "options": ["A condition", "A typo", "A folder", "A screenshot"], "correct_answer": 0}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Data and Graph Literacy": {
+        "teacher_email": "teacher@school.com",
+        "teacher_name": "Demo Teacher",
+        "description": "Interpret charts, trends, and data representations with confidence",
+        "grade_levels": [8, 9, 10],
+        "subjects": ["Mathematics", "Data"],
+        "modules": [
+            {"title": "Reading Graphs", "description": "Understanding common chart types", "content": "Lesson notes: Bar graphs compare categories, line graphs show change over time, and pie charts show parts of a whole. Students should identify axes, labels, scales, and what a graph is designed to communicate."},
+            {"title": "Interpreting Trends", "description": "Using data to make conclusions", "content": "Lesson notes: Trends show patterns such as increase, decrease, or stability. Students should avoid guessing and instead use exact data points or visible patterns to support a conclusion from a graph or table."}
+        ],
+        "quiz": {
+            "title": "Data Literacy Final Quiz",
+            "questions": [
+                {"question": "Theory: Which graph is most useful for showing change over time?", "options": ["Line graph", "Pie chart", "Poster board", "Icon list"], "correct_answer": 0},
+                {"question": "Practical: If a line graph rises steadily from January to April, what is the best conclusion?", "options": ["The values decreased", "The values stayed the same", "The values increased over time", "The graph has no pattern"], "correct_answer": 2}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    },
+    "Financial Literacy Basics": {
+        "teacher_email": "teacher@school.com",
+        "teacher_name": "Demo Teacher",
+        "description": "Learn budgeting, saving, and smart money decisions",
+        "grade_levels": [9, 10, 11, 12],
+        "subjects": ["Financial Literacy", "Mathematics"],
+        "modules": [
+            {"title": "Budgeting Essentials", "description": "Planning income and expenses", "content": "Lesson notes: A budget compares money coming in with money going out. Students should categorize needs and wants, plan spending, and understand that a balanced budget helps prevent overspending."},
+            {"title": "Saving and Goals", "description": "Building healthy financial habits", "content": "Lesson notes: Saving means setting aside money for future needs or goals. Students should understand short-term versus long-term goals and how consistent saving supports financial stability."}
+        ],
+        "quiz": {
+            "title": "Financial Literacy Final Quiz",
+            "questions": [
+                {"question": "Theory: What is the main purpose of a budget?", "options": ["To waste money faster", "To track income and expenses", "To remove all spending", "To avoid all goals"], "correct_answer": 1},
+                {"question": "Practical: A student earns $40 and plans to spend $25 while saving the rest. How much will be saved?", "options": ["$5", "$10", "$15", "$20"], "correct_answer": 2}
+            ],
+            "total_marks": 20,
+            "passing_marks": 12
+        }
+    }
+}
+
+
+def normalize_demo_course(course: dict) -> dict:
+    blueprint = DEMO_COURSE_BLUEPRINTS.get(course.get("title"))
+    if not blueprint:
+        return course
+
+    normalized = {**course}
+    normalized["description"] = blueprint["description"]
+    normalized["grade_levels"] = blueprint["grade_levels"]
+    normalized["subjects"] = blueprint["subjects"]
+
+    existing_modules = course.get("modules", [])
+    normalized_modules = []
+    for index, module_blueprint in enumerate(blueprint["modules"]):
+        existing = existing_modules[index] if index < len(existing_modules) else {}
+        normalized_modules.append({
+            "id": existing.get("id", stable_demo_id(normalized["id"], "module", str(index + 1))),
+            "title": module_blueprint["title"],
+            "description": module_blueprint["description"],
+            "content": module_blueprint["content"],
+            "video_url": existing.get("video_url"),
+            "order": index + 1
+        })
+    normalized["modules"] = normalized_modules
+
+    existing_quizzes = course.get("quizzes", [])
+    existing_quiz = existing_quizzes[-1] if existing_quizzes else {}
+    normalized["quizzes"] = [{
+        "id": existing_quiz.get("id", stable_demo_id(normalized["id"], "quiz", "final")),
+        "title": blueprint["quiz"]["title"],
+        "module_id": normalized_modules[-1]["id"],
+        "questions": blueprint["quiz"]["questions"],
+        "total_marks": blueprint["quiz"]["total_marks"],
+        "passing_marks": blueprint["quiz"]["passing_marks"]
+    }]
+
+    return normalized
+
+
+async def ensure_demo_courses_catalog():
+    teacher_emails = {blueprint["teacher_email"] for blueprint in DEMO_COURSE_BLUEPRINTS.values()}
+    teacher_docs = await db.users.find({"email": {"$in": list(teacher_emails)}}, {"_id": 0}).to_list(100)
+    teacher_map = {teacher["email"]: teacher for teacher in teacher_docs}
+
+    for title, blueprint in DEMO_COURSE_BLUEPRINTS.items():
+        existing = await db.courses.find_one({"title": title}, {"_id": 0})
+        teacher = teacher_map.get(blueprint["teacher_email"])
+        course_id = existing["id"] if existing else stable_demo_id("course", title)
+
+        modules = []
+        for index, module_blueprint in enumerate(blueprint["modules"], start=1):
+            modules.append({
+                "id": stable_demo_id(course_id, "module", str(index)),
+                "title": module_blueprint["title"],
+                "description": module_blueprint["description"],
+                "content": module_blueprint["content"],
+                "video_url": None,
+                "order": index
+            })
+
+        quiz = {
+            "id": stable_demo_id(course_id, "quiz", "final"),
+            "title": blueprint["quiz"]["title"],
+            "module_id": modules[-1]["id"],
+            "questions": blueprint["quiz"]["questions"],
+            "total_marks": blueprint["quiz"]["total_marks"],
+            "passing_marks": blueprint["quiz"]["passing_marks"]
+        }
+
+        course_doc = {
+            "id": course_id,
+            "title": title,
+            "description": blueprint["description"],
+            "cover_image": None,
+            "teacher_id": teacher["id"] if teacher else stable_demo_id("teacher", blueprint["teacher_email"]),
+            "teacher_name": teacher["name"] if teacher else blueprint["teacher_name"],
+            "grade_levels": blueprint["grade_levels"],
+            "subjects": blueprint["subjects"],
+            "is_free": True,
+            "price": 0,
+            "modules": modules,
+            "quizzes": [quiz],
+            "created_at": existing.get("created_at") if existing else datetime.now(timezone.utc).isoformat()
+        }
+
+        if existing:
+            await db.courses.update_one({"id": course_id}, {"$set": course_doc})
+        else:
+            await db.courses.insert_one(course_doc)
 
 
 if __name__ == "__main__":

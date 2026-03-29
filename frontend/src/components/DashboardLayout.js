@@ -31,15 +31,25 @@ const DashboardLayout = ({ children }) => {
       case 'student':
         return [
           ...baseItems,
-          { icon: BookOpen, label: 'Books', path: '/books' },
+          { icon: BookOpen, label: 'Library', path: '/books' },
           { icon: GraduationCap, label: 'Courses', path: '/courses' },
+          { icon: Library, label: 'My Books', path: '/purchased-books' },
           { icon: Award, label: 'Certificates', path: '/certificates' },
+          { icon: User, label: 'Profile', path: '/profile' },
+        ];
+      case 'guest':
+        return [
+          { icon: BookOpen, label: 'Library', path: '/books' },
+          { icon: ShoppingCart, label: 'Cart', path: '/cart' },
+          { icon: Library, label: 'My Books', path: '/purchased-books' },
           { icon: User, label: 'Profile', path: '/profile' },
         ];
       case 'parent':
         return [
           ...baseItems,
-          { icon: Users, label: 'My Children', path: '/parent' },
+          { icon: Award, label: 'Quiz Results', path: '/parent/quizzes' },
+          { icon: BookOpen, label: 'Books', path: '/parent/books' },
+          { icon: BarChart3, label: 'Activity', path: '/parent/activity' },
           { icon: User, label: 'Profile', path: '/profile' },
         ];
       case 'teacher':
@@ -52,7 +62,7 @@ const DashboardLayout = ({ children }) => {
       case 'librarian':
         return [
           ...baseItems,
-          { icon: BookOpen, label: 'Inventory', path: '/librarian/inventory' },
+          { icon: BookOpen, label: 'Active Borrows', path: '/librarian/active-borrows' },
           { icon: Users, label: 'Borrow Requests', path: '/librarian/borrows' },
           { icon: User, label: 'Profile', path: '/profile' },
         ];
@@ -76,6 +86,7 @@ const DashboardLayout = ({ children }) => {
       case 'librarian': return '/librarian';
       case 'teacher': return '/teacher';
       case 'parent': return '/parent';
+      case 'guest': return '/dashboard';
       default: return '/dashboard';
     }
   };
@@ -164,7 +175,9 @@ const DashboardLayout = ({ children }) => {
           {/* Navigation */}
           <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
             {navItems.map((item) => {
-              const isActive = location.pathname === item.path;
+              const isActive = item.path === getDashboardPath()
+                ? location.pathname === item.path
+                : location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
               return (
                 <Link
                   key={item.path}

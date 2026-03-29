@@ -14,12 +14,25 @@ import AdminDashboard from './pages/AdminDashboard';
 import LibrarianDashboard from './pages/LibrarianDashboard';
 import TeacherDashboard from './pages/TeacherDashboard';
 import ParentDashboard from './pages/ParentDashboard';
+import ProfilePage from './pages/ProfilePage';
 import BooksPage from './pages/BooksPage';
+import BookDetailPage from './pages/BookDetailPage';
 import CoursesPage, { CourseDetailPage } from './pages/CoursesPage';
 import CertificatesPage from './pages/CertificatesPage';
 import CartPage from './pages/CartPage';
+import PurchasedBooksPage from './pages/PurchasedBooksPage';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+
+const DashboardHome = () => {
+  const { user } = useAuth();
+
+  if (user?.role === 'guest') {
+    return <PurchasedBooksPage />;
+  }
+
+  return <StudentDashboard />;
+};
 
 // Protected Route Component
 const ProtectedRoute = ({ children, allowedRoles }) => {
@@ -48,6 +61,8 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
         return <Navigate to="/teacher" replace />;
       case 'parent':
         return <Navigate to="/parent" replace />;
+      case 'guest':
+        return <Navigate to="/books" replace />;
       default:
         return <Navigate to="/dashboard" replace />;
     }
@@ -78,6 +93,8 @@ const PublicRoute = ({ children }) => {
         return <Navigate to="/teacher" replace />;
       case 'parent':
         return <Navigate to="/parent" replace />;
+      case 'guest':
+        return <Navigate to="/books" replace />;
       default:
         return <Navigate to="/dashboard" replace />;
     }
@@ -128,11 +145,12 @@ function AppRoutes() {
 
       {/* Books - Public but enhanced when logged in */}
       <Route path="/books" element={<BooksPage />} />
+      <Route path="/books/:bookId" element={<BookDetailPage />} />
 
       {/* Student Routes */}
       <Route path="/dashboard" element={
-        <ProtectedRoute allowedRoles={['student']}>
-          <StudentDashboard />
+        <ProtectedRoute allowedRoles={['student', 'guest']}>
+          <DashboardHome />
         </ProtectedRoute>
       } />
       <Route path="/courses" element={
@@ -150,8 +168,13 @@ function AppRoutes() {
           <CertificatesPage />
         </ProtectedRoute>
       } />
+      <Route path="/purchased-books" element={
+        <ProtectedRoute allowedRoles={['student', 'guest']}>
+          <PurchasedBooksPage />
+        </ProtectedRoute>
+      } />
       <Route path="/cart" element={
-        <ProtectedRoute allowedRoles={['student']}>
+        <ProtectedRoute allowedRoles={['student', 'guest']}>
           <CartPage />
         </ProtectedRoute>
       } />
@@ -198,11 +221,16 @@ function AppRoutes() {
           <ParentDashboard />
         </ProtectedRoute>
       } />
+      <Route path="/parent/*" element={
+        <ProtectedRoute allowedRoles={['parent']}>
+          <ParentDashboard />
+        </ProtectedRoute>
+      } />
 
       {/* Profile - accessible by all authenticated users */}
       <Route path="/profile" element={
         <ProtectedRoute>
-          <StudentDashboard />
+          <ProfilePage />
         </ProtectedRoute>
       } />
 

@@ -47,8 +47,8 @@ export const AuthProvider = ({ children }) => {
     fetchUser();
   }, [fetchUser]);
 
-  const login = async (email, password) => {
-    const response = await axios.post(`${API}/auth/login`, { email, password });
+  const login = async (email, password, role = null) => {
+    const response = await axios.post(`${API}/auth/login`, { email, password, role });
     const { access_token, user: userData } = response.data;
     localStorage.setItem('token', access_token);
     setToken(access_token);
@@ -86,6 +86,7 @@ export const AuthProvider = ({ children }) => {
     loginWithToken,
     register,
     logout,
+    refreshUser: fetchUser,
     isAuthenticated: !!user,
     axiosInstance
   };

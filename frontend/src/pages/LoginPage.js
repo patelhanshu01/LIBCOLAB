@@ -29,6 +29,9 @@ const LoginPage = () => {
   
   const { login, loginWithToken } = useAuth();
   const navigate = useNavigate();
+  const requiresSchoolSelection = schoolRole === 'student' || schoolRole === 'teacher';
+  const requiresStudentId = schoolRole === 'student';
+  const requiresEmployeeId = schoolRole === 'teacher';
 
   useEffect(() => {
     const fetchSchools = async () => {
@@ -51,11 +54,11 @@ const LoginPage = () => {
 
     setLoading(true);
     try {
-      const user = await login(email, password);
+      const user = await login(email, password, 'guest');
       toast.success(`Welcome back, ${user.name}!`);
       redirectBasedOnRole(user.role);
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Invalid email or password');
+      toast.error(error.response?.data?.detail || 'Only guest accounts can use Guest Login');
     } finally {
       setLoading(false);
     }
@@ -63,17 +66,22 @@ const LoginPage = () => {
 
   const handleSchoolLogin = async (e) => {
     e.preventDefault();
-    if (!selectedSchool || !schoolEmail || !password) {
+    if (!schoolEmail || !password) {
       toast.error('Please fill in all required fields');
       return;
     }
 
-    if (schoolRole === 'student' && !studentId) {
+    if (requiresSchoolSelection && !selectedSchool) {
+      toast.error('Please select your school');
+      return;
+    }
+
+    if (requiresStudentId && !studentId) {
       toast.error('Please enter your Student ID');
       return;
     }
 
-    if (schoolRole === 'teacher' && !employeeId) {
+    if (requiresEmployeeId && !employeeId) {
       toast.error('Please enter your Employee ID');
       return;
     }
@@ -81,9 +89,9 @@ const LoginPage = () => {
     setLoading(true);
     try {
       const response = await axios.post(`${API}/auth/school-verify`, {
-        school_id: selectedSchool,
-        student_id: schoolRole === 'student' ? studentId : null,
-        employee_id: schoolRole === 'teacher' ? employeeId : null,
+        school_id: requiresSchoolSelection ? selectedSchool : null,
+        student_id: requiresStudentId ? studentId : null,
+        employee_id: requiresEmployeeId ? employeeId : null,
         school_email: schoolEmail,
         password: password,
         role: schoolRole
@@ -106,6 +114,7 @@ const LoginPage = () => {
       case 'librarian': return '/librarian';
       case 'teacher': return '/teacher';
       case 'parent': return '/parent';
+      case 'guest': return '/books';
       default: return '/dashboard';
     }
   };
@@ -114,13 +123,19 @@ const LoginPage = () => {
     navigate(getRedirectPath(role));
   };
 
+  useEffect(() => {
+    setSelectedSchool('');
+    setStudentId('');
+    setEmployeeId('');
+  }, [schoolRole]);
+
   const selectedSchoolData = schools.find(s => s.id === selectedSchool);
 
   return (
-    <div className="min-h-screen bg-background flex">
+    <div className="h-screen overflow-hidden bg-background flex">
       {/* Left Side - Form */}
-      <div className="flex-1 flex items-center justify-center p-8 overflow-y-auto">
-        <div className="w-full max-w-md space-y-6">
+      <div className="flex-1 flex items-center justify-center p-6 lg:p-8">
+        <div className="w-full max-w-md space-y-5">
           <div>
             <Link to="/" className="flex items-center gap-2 mb-8" data-testid="logo-link">
               <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
@@ -138,7 +153,7 @@ const LoginPage = () => {
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="regular" className="gap-2" data-testid="regular-login-tab">
                 <User className="w-4 h-4" />
-                Regular Login
+                Guest Login
               </TabsTrigger>
               <TabsTrigger value="school" className="gap-2" data-testid="school-login-tab">
                 <School className="w-4 h-4" />
@@ -148,7 +163,7 @@ const LoginPage = () => {
 
             {/* Regular Login */}
             <TabsContent value="regular">
-              <form onSubmit={handleRegularLogin} className="space-y-5 mt-6">
+              <form onSubmit={handleRegularLogin} className="space-y-4 mt-5">
                 <div className="space-y-2">
                   <Label htmlFor="email">Email</Label>
                   <Input
@@ -204,7 +219,7 @@ const LoginPage = () => {
 
             {/* School Login */}
             <TabsContent value="school">
-              <form onSubmit={handleSchoolLogin} className="space-y-5 mt-6">
+              <form onSubmit={handleSchoolLogin} className="space-y-4 mt-5">
                 <div className="space-y-2">
                   <Label>I am a</Label>
                   <Select value={schoolRole} onValueChange={setSchoolRole}>
@@ -213,34 +228,39 @@ const LoginPage = () => {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="student">Student</SelectItem>
-                      <SelectItem value="teacher">Teacher / Staff</SelectItem>
+                      <SelectItem value="teacher">Teacher</SelectItem>
+                      <SelectItem value="parent">Parent</SelectItem>
+                      <SelectItem value="librarian">Librarian</SelectItem>
+                      <SelectItem value="admin">Admin</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>Select Your School</Label>
-                  <Select value={selectedSchool} onValueChange={setSelectedSchool}>
-                    <SelectTrigger data-testid="school-select" className="h-12">
-                      <Building2 className="w-4 h-4 mr-2 text-muted-foreground" />
-                      <SelectValue placeholder="Choose your school" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {schools.filter(s => s.is_partner).map(school => (
-                        <SelectItem key={school.id} value={school.id}>
-                          {school.name} ({school.code})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {selectedSchoolData && (
-                    <p className="text-xs text-muted-foreground">
-                      {selectedSchoolData.address}, {selectedSchoolData.city}
-                    </p>
-                  )}
-                </div>
+                {requiresSchoolSelection && (
+                  <div className="space-y-2">
+                    <Label>Select Your School</Label>
+                    <Select value={selectedSchool} onValueChange={setSelectedSchool}>
+                      <SelectTrigger data-testid="school-select" className="h-12">
+                        <Building2 className="w-4 h-4 mr-2 text-muted-foreground" />
+                        <SelectValue placeholder="Choose your school" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {schools.filter(s => s.is_partner).map(school => (
+                          <SelectItem key={school.id} value={school.id}>
+                            {school.name} ({school.code})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {selectedSchoolData && (
+                      <p className="text-xs text-muted-foreground">
+                        {selectedSchoolData.address}, {selectedSchoolData.city}
+                      </p>
+                    )}
+                  </div>
+                )}
 
-                {schoolRole === 'student' && (
+                {requiresStudentId && (
                   <div className="space-y-2">
                     <Label htmlFor="studentId">Student ID</Label>
                     <Input
@@ -254,7 +274,7 @@ const LoginPage = () => {
                   </div>
                 )}
 
-                {schoolRole === 'teacher' && (
+                {requiresEmployeeId && (
                   <div className="space-y-2">
                     <Label htmlFor="employeeId">Employee ID</Label>
                     <Input
@@ -269,11 +289,11 @@ const LoginPage = () => {
                 )}
 
                 <div className="space-y-2">
-                  <Label htmlFor="schoolEmail">School Email</Label>
+                  <Label htmlFor="schoolEmail">{requiresSchoolSelection ? 'School Email' : 'Email'}</Label>
                   <Input
                     id="schoolEmail"
                     type="email"
-                    placeholder={selectedSchoolData ? `you${selectedSchoolData.email_domain || '@school.edu'}` : 'you@school.edu'}
+                    placeholder={requiresSchoolSelection ? (selectedSchoolData ? `you${selectedSchoolData.email_domain || '@school.edu'}` : 'you@school.edu') : 'you@example.com'}
                     value={schoolEmail}
                     onChange={(e) => setSchoolEmail(e.target.value)}
                     data-testid="school-email-input"
@@ -325,33 +345,6 @@ const LoginPage = () => {
             </p>
           </div>
 
-          {/* Demo Credentials */}
-          <div className="mt-6 p-4 bg-muted rounded-xl">
-            <p className="text-sm font-medium mb-3">Demo Accounts:</p>
-            <div className="space-y-3 text-xs">
-              <div className="pb-2 border-b border-border">
-                <p className="font-medium text-muted-foreground mb-1">Regular Login:</p>
-                <div className="grid grid-cols-2 gap-1 text-muted-foreground">
-                  <div>Admin: admin@library.com</div>
-                  <div>Pass: admin123</div>
-                  <div>Parent: parent@family.com</div>
-                  <div>Pass: parent123</div>
-                  <div>Librarian: librarian@library.com</div>
-                  <div>Pass: librarian123</div>
-                </div>
-              </div>
-              <div>
-                <p className="font-medium text-muted-foreground mb-1">School Login (NTHS):</p>
-                <div className="grid grid-cols-2 gap-1 text-muted-foreground">
-                  <div>Student ID: NTHS-2024-001</div>
-                  <div>Email: t.anderson@nths.edu</div>
-                  <div>Teacher ID: T-NTHS-001</div>
-                  <div>Email: m.johnson@nths.edu</div>
-                  <div className="col-span-2">Pass: student123 / teacher123</div>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 

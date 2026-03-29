@@ -87,7 +87,7 @@ const RegisterPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background flex">
+    <div className="h-screen overflow-hidden bg-background flex">
       {/* Left Side - Image */}
       <div className="hidden lg:block lg:flex-1 bg-muted relative">
         <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-transparent" />
@@ -99,8 +99,8 @@ const RegisterPage = () => {
       </div>
 
       {/* Right Side - Form */}
-      <div className="flex-1 flex items-center justify-center p-8 overflow-y-auto">
-        <div className="w-full max-w-md space-y-6">
+      <div className="flex-1 flex items-center justify-center p-6 lg:p-8">
+        <div className="w-full max-w-md space-y-5">
           <div>
             <Link to="/" className="flex items-center gap-2 mb-8" data-testid="logo-link">
               <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
@@ -114,7 +114,7 @@ const RegisterPage = () => {
             </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="role">I am a</Label>
               <Select value={formData.role} onValueChange={(value) => handleChange('role', value)}>
@@ -125,6 +125,7 @@ const RegisterPage = () => {
                   <SelectItem value="student">Student</SelectItem>
                   <SelectItem value="parent">Parent</SelectItem>
                   <SelectItem value="teacher">Teacher</SelectItem>
+                  <SelectItem value="guest">Guest</SelectItem>
                 </SelectContent>
               </Select>
             </div>
